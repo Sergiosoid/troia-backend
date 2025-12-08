@@ -4,6 +4,20 @@ import { query, queryOne, queryAll } from '../database/db-adapter.js';
 
 const router = express.Router();
 
+// Listar todos os veículos do usuário
+router.get('/', authRequired, async (req, res) => {
+  try {
+    const veiculos = await queryAll(
+      'SELECT * FROM veiculos WHERE usuario_id = ?',
+      [req.userId]
+    );
+    res.json(veiculos);
+  } catch (err) {
+    console.error('Erro ao listar veículos:', err);
+    res.status(500).json({ error: 'Erro ao listar veículos' });
+  }
+});
+
 // Cadastrar
 router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), async (req, res) => {
   try {
