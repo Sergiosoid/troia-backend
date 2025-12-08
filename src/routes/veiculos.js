@@ -37,6 +37,36 @@ router.get('/', authRequired, async (req, res) => {
   }
 });
 
+// Criar novo veículo
+router.post('/', authRequired, async (req, res) => {
+  try {
+    const { placa, modelo, ano } = req.body;
+
+    if (!placa || !modelo || !ano) {
+      return res.status(400).json({ error: 'Campos obrigatórios: placa, modelo, ano' });
+    }
+
+    // Inserir veículo
+    const result = await query(
+      `INSERT INTO veiculos (placa, modelo, ano, usuario_id)
+       VALUES (?, ?, ?, ?)`,
+      [placa, modelo, ano, req.userId]
+    );
+
+    const id = result.insertId || null;
+
+    return res.json({
+      success: true,
+      id,
+      mensagem: 'Veículo cadastrado com sucesso'
+    });
+
+  } catch (err) {
+    console.error('Erro ao criar veículo:', err);
+    res.status(500).json({ error: 'Erro ao criar veículo' });
+  }
+});
+
 // Cadastrar
 router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), async (req, res) => {
   try {
