@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { authMiddleware } from '../middleware/authMiddleware.js';
+import { authRequired, requireRole } from '../middleware/auth.js';
 import { query, queryOne, queryAll } from '../database/db-adapter.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -67,7 +67,7 @@ const validarData = (data) => {
 };
 
 // Cadastrar manutenção
-router.post('/cadastrar', authMiddleware, upload.single('documento'), async (req, res) => {
+router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), upload.single('documento'), async (req, res) => {
   try {
     const file = req.file;
     const userId = req.userId; // Do middleware JWT
@@ -193,7 +193,7 @@ router.post('/cadastrar', authMiddleware, upload.single('documento'), async (req
 });
 
 // Listar manutenções por veículo
-router.get('/veiculo/:id', authMiddleware, async (req, res) => {
+router.get('/veiculo/:id', authRequired, async (req, res) => {
   try {
     const veiculoId = req.params.id;
     const userId = req.userId; // Do middleware JWT
@@ -246,7 +246,7 @@ router.get('/veiculo/:id', authMiddleware, async (req, res) => {
 });
 
 // Buscar manutenções por termo
-router.get('/buscar', authMiddleware, async (req, res) => {
+router.get('/buscar', authRequired, async (req, res) => {
   try {
     const termo = req.query.termo?.trim() || '';
     const userId = req.userId; // Do middleware JWT
@@ -308,7 +308,7 @@ router.get('/buscar', authMiddleware, async (req, res) => {
 });
 
 // Excluir manutenção
-router.delete('/:id', authMiddleware, async (req, res) => {
+router.delete('/:id', authRequired, requireRole('admin', 'operador'), async (req, res) => {
   try {
     const manutencaoId = req.params.id;
     const userId = req.userId; // Do middleware JWT

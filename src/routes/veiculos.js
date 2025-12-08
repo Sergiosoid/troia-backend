@@ -1,11 +1,11 @@
 import express from 'express';
-import { authMiddleware } from '../middleware/authMiddleware.js';
+import { authRequired, requireRole } from '../middleware/auth.js';
 import { query, queryOne, queryAll } from '../database/db-adapter.js';
 
 const router = express.Router();
 
 // Cadastrar
-router.post('/cadastrar', authMiddleware, async (req, res) => {
+router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), async (req, res) => {
   try {
     const { placa, renavam, proprietario_id, marca, modelo, ano } = req.body;
     const userId = req.userId; // Do middleware JWT
@@ -32,7 +32,7 @@ router.post('/cadastrar', authMiddleware, async (req, res) => {
 });
 
 // Listar veículos por proprietário
-router.get('/proprietario/:id', authMiddleware, async (req, res) => {
+router.get('/proprietario/:id', authRequired, async (req, res) => {
   try {
     const id = req.params.id;
     const userId = req.userId; // Do middleware JWT
@@ -50,7 +50,7 @@ router.get('/proprietario/:id', authMiddleware, async (req, res) => {
 
 // Buscar veículo por placa
 // SEGURANÇA: Filtra obrigatoriamente por usuario_id para prevenir acesso não autorizado
-router.get('/buscar-placa/:placa', authMiddleware, async (req, res) => {
+router.get('/buscar-placa/:placa', authRequired, async (req, res) => {
   try {
     const placa = req.params.placa.toUpperCase();
     const userId = req.userId; // Do middleware JWT
@@ -91,7 +91,7 @@ router.get('/buscar-placa/:placa', authMiddleware, async (req, res) => {
 });
 
 // Listar veículos com totais de gastos (DEVE VIR ANTES DE /:id)
-router.get('/totais', authMiddleware, async (req, res) => {
+router.get('/totais', authRequired, async (req, res) => {
   try {
     const userId = req.userId; // Do middleware JWT
 
@@ -120,7 +120,7 @@ router.get('/totais', authMiddleware, async (req, res) => {
 });
 
 // Histórico de manutenções de um veículo (DEVE VIR ANTES DE /:id)
-router.get('/:id/historico', authMiddleware, async (req, res) => {
+router.get('/:id/historico', authRequired, async (req, res) => {
   try {
     const id = req.params.id;
     const userId = req.userId; // Do middleware JWT
@@ -143,7 +143,7 @@ router.get('/:id/historico', authMiddleware, async (req, res) => {
 
 // Buscar veículo por ID (DEVE VIR POR ÚLTIMO)
 // SEGURANÇA: Filtra obrigatoriamente por usuario_id para prevenir acesso não autorizado
-router.get('/:id', authMiddleware, async (req, res) => {
+router.get('/:id', authRequired, async (req, res) => {
   try {
     const id = req.params.id;
     const userId = req.userId; // Do middleware JWT

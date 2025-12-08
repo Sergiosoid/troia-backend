@@ -17,6 +17,8 @@ export function authRequired(req, res, next) {
 
     const payload = jwt.verify(token, process.env.JWT_SECRET || "troia-default-secret");
     req.user = payload;
+    // Compatibilidade: definir req.userId (pode vir como id ou userId no payload)
+    req.userId = payload.id || payload.userId || payload.user_id;
     next();
   } catch (err) {
     return res.status(401).json({ error: "Token inválido ou expirado" });

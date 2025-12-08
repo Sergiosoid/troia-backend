@@ -1,11 +1,11 @@
 import express from 'express';
-import { authMiddleware } from '../middleware/authMiddleware.js';
+import { authRequired, requireRole } from '../middleware/auth.js';
 import { query, queryOne, queryAll } from '../database/db-adapter.js';
 
 const router = express.Router();
 
 // Cadastrar
-router.post('/cadastrar', authMiddleware, async (req, res) => {
+router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), async (req, res) => {
   try {
     const { nome, cpf, rg, cnh, telefone } = req.body;
     const userId = req.userId; // Do middleware JWT
@@ -31,7 +31,7 @@ router.post('/cadastrar', authMiddleware, async (req, res) => {
 });
 
 // Listar todos do usuário
-router.get('/', authMiddleware, async (req, res) => {
+router.get('/', authRequired, async (req, res) => {
   try {
     const userId = req.userId; // Do middleware JWT
 
