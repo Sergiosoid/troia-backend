@@ -1,110 +1,80 @@
-import express from 'express';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { query, queryOne } from '../database/db-adapter.js';
+import express from "express";
+import bcrypt from "bcrypt";
+import { query, queryOne } from "../database/db-adapter.js";
+import { generateToken } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// Configuração de segurança: salt rounds para bcrypt
-const SALT_ROUNDS = 10;
-
-// Configuração JWT
-const JWT_SECRET = process.env.JWT_SECRET || 'troia-mvp-secret-key-change-in-production';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d'; // 7 dias
-
-// Função para hash de senha usando bcrypt (seguro para produção)
-const hashSenha = (senha) => {
-  return bcrypt.hashSync(senha, SALT_ROUNDS);
-};
-
-// Gerar JWT token
-const gerarToken = (userId) => {
-  return jwt.sign(
-    { userId },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN }
-  );
-};
-
-// Registrar novo usuário
-router.post('/register', async (req, res) => {
+/**
+ * Registrar usuário
+ * Campos: nome, email, senha, role (opcional)
+ */
+router.post("/register", async (req, res) => {
   try {
-    const { nome, email, senha } = req.body;
+    const { nome, email, senha, role = "cliente" } = req.body;
 
-    if (!nome || !email || !senha) {
-      return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' });
-    }
+    if (!nome || !email || !senha)
+      return res.status(400).json({ error: "Campos obrigatórios ausentes" });
 
-    // Verificar se email já existe
-    const existingUser = await queryOne('SELECT id FROM usuarios WHERE email = ?', [email]);
-    
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email já cadastrado' });
-    }
-
-    // Criar novo usuário
-    const senhaHash = hashSenha(senha);
-    const result = await query(
-      'INSERT INTO usuarios (nome, email, senha) VALUES (?, ?, ?)',
-      [nome, email, senhaHash]
-    );
-
-    const token = gerarToken(result.insertId);
-    
-    res.json({
-      userId: result.insertId,
-      nome,
-      email,
-      token
-    });
-  } catch (error) {
-    console.error('[ERRO] Erro ao registrar usuário:', error);
-    return res.status(500).json({ error: error.message || 'Erro ao processar registro' });
-  }
-});
-
-// Login
-// SEGURANÇA: Usa bcrypt.compareSync para comparar senha (não compara hash direto)
-router.post('/login', async (req, res) => {
-  try {
-    const { email, senha } = req.body;
-
-    if (!email || !senha) {
-      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
-    }
-
-    // Buscar usuário por email primeiro (bcrypt não permite comparação direta)
-    const row = await queryOne(
-      'SELECT id, nome, email, senha FROM usuarios WHERE email = ?',
+    const exists = await queryOne(
+      "SELECT id FROM usuarios WHERE email = ? LIMIT 1",
       [email]
     );
 
-    // Se não encontrou usuário, retornar erro genérico (não revelar se email existe)
-    if (!row) {
-      return res.status(401).json({ error: 'Email ou senha incorretos' });
-    }
+    if (exists)
+      return res.status(409).json({ error: "Email já cadastrado" });
 
-    // Comparar senha usando bcrypt.compareSync
-    // IMPORTANTE: bcrypt.compareSync compara a senha em texto plano com o hash armazenado
-    const senhaValida = bcrypt.compareSync(senha, row.senha);
+    const hash = await bcrypt.hash(senha, 10);
 
-    if (!senhaValida) {
-      return res.status(401).json({ error: 'Email ou senha incorretos' });
-    }
+    await query(
+      "INSERT INTO usuarios (nome, email, senha, role) VALUES (?, ?, ?, ?)",
+      [nome, email, hash, role]
+    );
 
-    // Senha válida, gerar token
-    const token = gerarToken(row.id);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
-    res.json({
-      userId: row.id,
-      nome: row.nome,
-      email: row.email,
-      token
+/**
+ * Login
+ */
+router.post("/login", async (req, res) => {
+  try {
+    const { email, senha } = req.body;
+
+    const user = await queryOne(
+      "SELECT * FROM usuarios WHERE email = ? LIMIT 1",
+      [email]
+    );
+
+    if (!user)
+      return res.status(401).json({ error: "Credenciais inválidas" });
+
+    const match = await bcrypt.compare(senha, user.senha);
+    if (!match)
+      return res.status(401).json({ error: "Credenciais inválidas" });
+
+    const token = generateToken({
+      id: user.id,
+      email: user.email,
+      role: user.role,
     });
-  } catch (error) {
-    console.error('[ERRO] Erro ao buscar usuário no login:', error);
-    return res.status(500).json({ error: 'Erro ao processar login' });
+
+    return res.json({
+      usuario: {
+        id: user.id,
+        nome: user.nome,
+        email: user.email,
+        role: user.role,
+      },
+      token,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 });
 
 export default router;
+
