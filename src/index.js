@@ -23,6 +23,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Export app for server.js
+export default app;
+
 // Configurar CORS
 const defaultOrigins = [
   'http://localhost:8081',   // Expo local
@@ -308,7 +311,7 @@ function validateEnvironment() {
 }
 
 // Inicializar banco de dados e executar migrações
-async function startServer() {
+export async function startServer() {
   try {
     // Validar ambiente
     validateEnvironment();
@@ -319,18 +322,27 @@ async function startServer() {
     // Executar migrações apropriadas usando o adaptador
     await initMigrations();
     
-    // Iniciar servidor
-    const PORT = process.env.PORT || 10000;
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`✅ Servidor rodando na porta ${PORT}`);
-      console.log(`✅ Ambiente: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`✅ Banco: ${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'}`);
-      console.log(`✅ Health check: http://localhost:${PORT}/healthz`);
-    });
+    // Servidor será iniciado por server.js
+    console.log(`✅ Banco inicializado`);
+    console.log(`✅ Ambiente: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`✅ Banco: ${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'}`);
   } catch (error) {
     console.error('❌ Erro ao iniciar servidor:', error);
-    process.exit(1);
+    throw error;
   }
 }
 
-startServer();
+// Não iniciar automaticamente - server.js será responsável por isso
+// Mantido apenas para compatibilidade se alguém executar index.js diretamente
+if (import.meta.url.endsWith('index.js') && process.argv[1]?.endsWith('index.js')) {
+  startServer().then(() => {
+    const PORT = process.env.PORT || 10000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ Servidor rodando na porta ${PORT}`);
+      console.log(`✅ Health check: http://localhost:${PORT}/healthz`);
+    });
+  }).catch((error) => {
+    console.error('❌ Erro ao iniciar servidor:', error);
+    process.exit(1);
+  });
+}

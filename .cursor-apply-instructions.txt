@@ -1,0 +1,17 @@
+PATCHES APPLIED:
+- src/logger.js
+- src/routes/index.js
+- src/routes/setup.js
+- src/server.js
+- package.json (scripts updated)
+- .env.example
+- Procfile
+
+NEXT STEPS (Cursor should run these commands):
+1) cd backend
+2) npm install pino pino-pretty morgan
+3) npm run dev   # to start in dev or restart process
+4) (optional) curl -X POST http://localhost:3000/api/setup/init
+
+If running on Render, after pushing changes, go to Render dashboard and redeploy the service.
+
