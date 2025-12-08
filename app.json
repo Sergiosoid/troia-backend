@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "4339716d-648c-4145-93ac-0c3a0a56c929"
+      }
+    },
+    "android": {
+      "package": "com.sergiosoid.backend"
+    },
+    "ios": {
+      "bundleIdentifier": "n"
+    }
+  }
+}
