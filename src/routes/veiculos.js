@@ -40,17 +40,25 @@ router.get('/', authRequired, async (req, res) => {
 // Criar novo veículo
 router.post('/', authRequired, async (req, res) => {
   try {
-    const { placa, modelo, ano } = req.body;
+    const { placa, renavam, proprietario_id, marca, modelo, ano } = req.body;
 
-    if (!placa || !modelo || !ano) {
-      return res.status(400).json({ error: 'Campos obrigatórios: placa, modelo, ano' });
+    if (!placa) {
+      return res.status(400).json({ error: 'Placa é obrigatória' });
     }
 
     // Inserir veículo
     const result = await query(
-      `INSERT INTO veiculos (placa, modelo, ano, usuario_id)
-       VALUES (?, ?, ?, ?)`,
-      [placa, modelo, ano, req.userId]
+      `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, usuario_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        placa.trim().toUpperCase(),
+        renavam || null,
+        proprietario_id || null,
+        marca || null,
+        modelo || null,
+        ano || null,
+        req.userId
+      ]
     );
 
     const id = result.insertId || null;
@@ -58,6 +66,13 @@ router.post('/', authRequired, async (req, res) => {
     return res.json({
       success: true,
       id,
+      placa: placa.trim().toUpperCase(),
+      renavam: renavam || null,
+      proprietario_id: proprietario_id || null,
+      marca: marca || null,
+      modelo: modelo || null,
+      ano: ano || null,
+      usuario_id: req.userId,
       mensagem: 'Veículo cadastrado com sucesso'
     });
 

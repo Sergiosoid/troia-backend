@@ -161,6 +161,36 @@ const createTablesIfNotExist = async (db) => {
       console.log('  ✓ Tabela manutencoes já existe');
     }
 
+    // Tabela abastecimentos
+    const abastecimentosExists = await tableExists(db, 'abastecimentos');
+    if (!abastecimentosExists) {
+      console.log('  ✓ Criando tabela abastecimentos...');
+      await runSQL(db, `
+        CREATE TABLE abastecimentos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          veiculo_id INTEGER NOT NULL,
+          usuario_id INTEGER NOT NULL,
+          litros REAL,
+          valor_total REAL,
+          preco_por_litro REAL,
+          tipo_combustivel TEXT,
+          posto TEXT,
+          km_antes INTEGER,
+          km_depois INTEGER,
+          consumo REAL,
+          custo_por_km REAL,
+          data TEXT,
+          imagem TEXT,
+          criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (veiculo_id) REFERENCES veiculos(id) ON DELETE CASCADE,
+          FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+        )
+      `);
+      console.log('  ✓ Tabela abastecimentos criada');
+    } else {
+      console.log('  ✓ Tabela abastecimentos já existe');
+    }
+
   } catch (error) {
     console.error('  ✗ Erro ao criar tabelas:', error.message);
     throw error;

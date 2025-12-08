@@ -13,6 +13,7 @@ import authRouter from './routes/auth.js';
 import proprietariosRouter from './routes/proprietarios.js';
 import veiculosRouter from './routes/veiculos.js';
 import manutencoesRouter from './routes/manutencoes.js';
+import abastecimentosRouter from './routes/abastecimentos.js';
 import healthRouter from './routes/health.js';
 
 // Carregar variáveis de ambiente
@@ -99,6 +100,7 @@ app.use('/auth', authRouter);
 app.use('/proprietarios', proprietariosRouter);
 app.use('/veiculos', veiculosRouter);
 app.use('/manutencoes', manutencoesRouter);
+app.use('/abastecimentos', abastecimentosRouter);
 app.use('/healthz', healthRouter);
 
 // Inicializar cliente OpenAI
