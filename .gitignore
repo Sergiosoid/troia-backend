@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Node modules
 node_modules/
 
@@ -48,3 +49,9 @@ Thumbs.db
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+=======
+por.traineddata
+uploads/
+node_modules/
+database/
+>>>>>>> 28ce06e56da9b8adac7db14ebb03df4faf8e8662

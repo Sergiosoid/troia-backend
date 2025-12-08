@@ -23,9 +23,12 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+<<<<<<< HEAD
 // Export app for server.js
 export default app;
 
+=======
+>>>>>>> 28ce06e56da9b8adac7db14ebb03df4faf8e8662
 // Configurar CORS
 const defaultOrigins = [
   'http://localhost:8081',   // Expo local
@@ -311,7 +314,11 @@ function validateEnvironment() {
 }
 
 // Inicializar banco de dados e executar migrações
+<<<<<<< HEAD
 export async function startServer() {
+=======
+async function startServer() {
+>>>>>>> 28ce06e56da9b8adac7db14ebb03df4faf8e8662
   try {
     // Validar ambiente
     validateEnvironment();
@@ -322,6 +329,7 @@ export async function startServer() {
     // Executar migrações apropriadas usando o adaptador
     await initMigrations();
     
+<<<<<<< HEAD
     // Servidor será iniciado por server.js
     console.log(`✅ Banco inicializado`);
     console.log(`✅ Ambiente: ${process.env.NODE_ENV || 'development'}`);
@@ -346,3 +354,20 @@ if (import.meta.url.endsWith('index.js') && process.argv[1]?.endsWith('index.js'
     process.exit(1);
   });
 }
+=======
+    // Iniciar servidor
+    const PORT = process.env.PORT || 10000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ Servidor rodando na porta ${PORT}`);
+      console.log(`✅ Ambiente: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`✅ Banco: ${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'}`);
+      console.log(`✅ Health check: http://localhost:${PORT}/healthz`);
+    });
+  } catch (error) {
+    console.error('❌ Erro ao iniciar servidor:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
+>>>>>>> 28ce06e56da9b8adac7db14ebb03df4faf8e8662
