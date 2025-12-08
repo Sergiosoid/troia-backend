@@ -42,21 +42,26 @@ router.post('/', authRequired, async (req, res) => {
   try {
     const { placa, renavam, proprietario_id, marca, modelo, ano } = req.body;
 
-    if (!placa) {
-      return res.status(400).json({ error: 'Placa é obrigatória' });
+    // Validações simplificadas: apenas modelo e ano são obrigatórios
+    if (!modelo || !modelo.trim()) {
+      return res.status(400).json({ error: 'Modelo é obrigatório' });
     }
 
-    // Inserir veículo
+    if (!ano || !ano.trim()) {
+      return res.status(400).json({ error: 'Ano é obrigatório' });
+    }
+
+    // Inserir veículo (proprietario_id pode ser null)
     const result = await query(
       `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, usuario_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
-        placa.trim().toUpperCase(),
-        renavam || null,
+        placa ? placa.trim().toUpperCase() : null,
+        renavam ? renavam.trim() : null,
         proprietario_id || null,
-        marca || null,
-        modelo || null,
-        ano || null,
+        marca ? marca.trim() : null,
+        modelo.trim(),
+        ano.trim(),
         req.userId
       ]
     );
@@ -355,6 +360,59 @@ router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (r
         console.warn('[AVISO] Erro ao excluir arquivo temporário:', unlinkError.message);
       }
     }
+  }
+});
+
+/**
+ * Solicitar relatório completo do veículo (futura funcionalidade de venda)
+ * Por enquanto, apenas verifica se proprietário está completo
+ */
+router.post('/:id/solicitar-relatorio', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT * FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, req.userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Verificar se tem proprietário vinculado
+    if (!veiculo.proprietario_id) {
+      return res.json({
+        success: false,
+        motivo: 'proprietario_incompleto',
+        mensagem: 'Para gerar o relatório completo do veículo e aumentar o valor de venda, complete as informações do proprietário.'
+      });
+    }
+
+    // Verificar se proprietário tem dados completos
+    const proprietario = await queryOne(
+      'SELECT * FROM proprietarios WHERE id = ? AND usuario_id = ?',
+      [veiculo.proprietario_id, req.userId]
+    );
+
+    if (!proprietario || !proprietario.nome) {
+      return res.json({
+        success: false,
+        motivo: 'proprietario_incompleto',
+        mensagem: 'Para gerar o relatório completo do veículo e aumentar o valor de venda, complete as informações do proprietário.'
+      });
+    }
+
+    // Por enquanto, retornar que funcionalidade será implementada
+    return res.json({
+      success: false,
+      motivo: 'em_desenvolvimento',
+      mensagem: 'Funcionalidade de relatório completo será implementada em breve.'
+    });
+  } catch (err) {
+    console.error('Erro ao solicitar relatório:', err);
+    res.status(500).json({ error: 'Erro ao solicitar relatório' });
   }
 });
 

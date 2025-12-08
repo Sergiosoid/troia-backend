@@ -1,7 +1,7 @@
 import express from "express";
 import bcrypt from "bcrypt";
 import { query, queryOne } from "../database/db-adapter.js";
-import { generateToken } from "../middleware/auth.js";
+import { generateToken, authRequired } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -73,6 +73,19 @@ router.post("/login", async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Validar token JWT
+ * Rota protegida que verifica se o token é válido
+ */
+router.get("/validate-token", authRequired, async (req, res) => {
+  try {
+    // Se chegou aqui, o token é válido (authRequired já validou)
+    return res.json({ valid: true });
+  } catch (err) {
+    return res.status(401).json({ error: "Token inválido ou expirado" });
   }
 });
 
