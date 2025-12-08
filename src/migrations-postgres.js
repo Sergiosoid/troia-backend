@@ -189,6 +189,32 @@ const addMissingColumns = async () => {
         await query('ALTER TABLE veiculos ADD COLUMN ano VARCHAR(4)');
         console.log('  ✓ Coluna ano adicionada em veiculos');
       }
+
+      // Tabela veiculos — adicionar coluna km_atual
+      const kmAtualExists = await columnExists('veiculos', 'km_atual');
+      if (!kmAtualExists) {
+        console.log('  ✓ Adicionando coluna km_atual em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN km_atual INTEGER');
+        console.log('  ✓ Coluna km_atual adicionada em veiculos');
+      }
+    }
+
+    // Criar tabela km_historico se não existir
+    const kmHistoricoExists = await tableExists('km_historico');
+    if (!kmHistoricoExists) {
+      console.log('  ✓ Criando tabela km_historico...');
+      await query(`
+        CREATE TABLE IF NOT EXISTS km_historico (
+          id SERIAL PRIMARY KEY,
+          veiculo_id INTEGER NOT NULL REFERENCES veiculos(id) ON DELETE CASCADE,
+          km INTEGER NOT NULL,
+          fonte TEXT NOT NULL,
+          criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+      console.log('  ✓ Tabela km_historico criada');
+    } else {
+      console.log('  ✓ Tabela km_historico já existe');
     }
 
     // Verificar e adicionar colunas em manutencoes

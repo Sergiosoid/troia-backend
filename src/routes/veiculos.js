@@ -1,8 +1,27 @@
 import express from 'express';
 import { authRequired, requireRole } from '../middleware/auth.js';
 import { query, queryOne, queryAll } from '../database/db-adapter.js';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import OpenAI from 'openai';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = express.Router();
+
+// Configurar upload temporário
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const upload = multer({
+  dest: uploadsDir,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
 
 // Listar todos os veículos do usuário
 router.get('/', authRequired, async (req, res) => {
@@ -192,6 +211,105 @@ router.get('/:id', authRequired, async (req, res) => {
   } catch (error) {
     console.error('[ERRO] Erro ao buscar veículo por ID:', error);
     return res.status(500).json({ error: error.message || 'Erro ao buscar veículo' });
+  }
+});
+
+// Endpoint: Atualizar KM por foto do painel
+router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (req, res) => {
+  try {
+    const veiculoId = req.params.id;
+    const userId = req.userId;
+
+    if (!req.file) {
+      return res.status(400).json({ error: "Nenhuma imagem enviada" });
+    }
+
+    // Validar se OpenAI API Key está configurada
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: "OpenAI API Key não configurada" });
+    }
+
+    // Ler imagem base64
+    const buffer = fs.readFileSync(req.file.path);
+    const base64 = buffer.toString('base64');
+    const mime = req.file.mimetype || 'image/jpeg';
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    // IA lê o KM do painel
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Extraia APENAS o número do odômetro desta imagem. Responda somente o número, sem formatação." },
+            {
+              type: "image_url",
+              image_url: { url: `data:${mime};base64,${base64}` }
+            }
+          ]
+        }
+      ],
+      max_tokens: 50
+    });
+
+    const texto = response.choices[0]?.message?.content?.trim();
+    const kmExtraido = parseInt(texto.replace(/\D/g, ""), 10);
+
+    if (isNaN(kmExtraido)) {
+      return res.status(400).json({ error: "Não foi possível identificar o KM na imagem." });
+    }
+
+    // Buscar veículo e km atual
+    const veiculo = await queryOne(
+      "SELECT km_atual FROM veiculos WHERE id = ? AND usuario_id = ?",
+      [veiculoId, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: "Veículo não encontrado" });
+    }
+
+    // Verificar se o KM não é menor que o anterior
+    if (veiculo.km_atual && kmExtraido < veiculo.km_atual) {
+      return res.status(400).json({ error: "KM detectado é menor que o atual. Confirme manualmente." });
+    }
+
+    // Salvar histórico de KM (se a tabela existir)
+    try {
+      await query(
+        "INSERT INTO km_historico (veiculo_id, km, fonte, criado_em) VALUES (?, ?, ?, datetime('now'))",
+        [veiculoId, kmExtraido, "foto"]
+      );
+    } catch (histError) {
+      // Se a tabela não existir, apenas logar (não é crítico)
+      console.warn('[AVISO] Tabela km_historico não existe ou erro ao inserir:', histError.message);
+    }
+
+    // Atualizar veículo
+    await query(
+      "UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?",
+      [kmExtraido, veiculoId, userId]
+    );
+
+    res.json({
+      sucesso: true,
+      km_detectado: kmExtraido
+    });
+
+  } catch (err) {
+    console.error("Erro ao atualizar KM:", err);
+    res.status(500).json({ error: "Erro ao atualizar KM" });
+  } finally {
+    // Limpar arquivo temporário
+    if (req.file?.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('[AVISO] Erro ao excluir arquivo temporário:', unlinkError.message);
+      }
+    }
   }
 });
 

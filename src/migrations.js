@@ -221,11 +221,41 @@ const addMissingColumns = async (db) => {
         console.log('  ✓ Coluna ano adicionada em veiculos');
       }
 
+      // SQLite: adicionar coluna km_atual a veiculos
+      const kmAtualExists = await columnExists(db, 'veiculos', 'km_atual');
+      if (!kmAtualExists) {
+        console.log('  ✓ Adicionando coluna km_atual em veiculos...');
+        await runSQL(db, `
+          ALTER TABLE veiculos
+          ADD COLUMN km_atual INTEGER
+        `).catch(() => {});
+        console.log('  ✓ Coluna km_atual adicionada em veiculos');
+      }
+
       // Verificar se placa tem UNIQUE (não pode adicionar via ALTER, mas verificamos)
       const placaExists = await columnExists(db, 'veiculos', 'placa');
       if (!placaExists) {
         console.log('  ⚠ Coluna placa não existe em veiculos (deve ser criada com a tabela)');
       }
+    }
+
+    // SQLite: criar tabela km_historico
+    const kmHistoricoExists = await tableExists(db, 'km_historico');
+    if (!kmHistoricoExists) {
+      console.log('  ✓ Criando tabela km_historico...');
+      await runSQL(db, `
+        CREATE TABLE IF NOT EXISTS km_historico (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          veiculo_id INTEGER NOT NULL,
+          km INTEGER NOT NULL,
+          fonte TEXT NOT NULL,
+          criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (veiculo_id) REFERENCES veiculos(id) ON DELETE CASCADE
+        )
+      `);
+      console.log('  ✓ Tabela km_historico criada');
+    } else {
+      console.log('  ✓ Tabela km_historico já existe');
     }
 
     // Verificar e adicionar colunas em manutencoes (SEM ACENTO)
