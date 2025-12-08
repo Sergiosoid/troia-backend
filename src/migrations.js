@@ -70,12 +70,28 @@ const createTablesIfNotExist = async (db) => {
           nome TEXT NOT NULL,
           email TEXT UNIQUE NOT NULL,
           senha TEXT NOT NULL,
+          role TEXT DEFAULT 'cliente',
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
       console.log('  ✓ Tabela usuarios criada');
     } else {
       console.log('  ✓ Tabela usuarios já existe');
+      // Verificar e adicionar coluna role se não existir
+      const roleExists = await columnExists(db, 'usuarios', 'role');
+      if (!roleExists) {
+        console.log('  ✓ Adicionando coluna role à tabela usuarios...');
+        try {
+          await runSQL(db, 'ALTER TABLE usuarios ADD COLUMN role TEXT DEFAULT \'cliente\'');
+          console.log('  ✓ Coluna role adicionada');
+        } catch (err) {
+          if (err.message.includes('duplicate column')) {
+            console.log('  ➡️  Coluna role já existe');
+          } else {
+            throw err;
+          }
+        }
+      }
     }
 
     // Tabela proprietarios
