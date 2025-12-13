@@ -91,6 +91,19 @@ router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), upload
       });
     }
 
+    // Verificar se veículo pertence ao usuário (SEGURANÇA)
+    const veiculo = await queryOne(
+      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [veiculo_id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(403).json({ 
+        error: 'Veículo não encontrado ou não pertence ao usuário',
+        code: 'VEICULO_NOT_FOUND'
+      });
+    }
+
     if (!data) {
       return res.status(400).json({ 
         error: 'Data é obrigatória',

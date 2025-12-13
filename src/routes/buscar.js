@@ -43,7 +43,7 @@ router.get('/', authRequired, async (req, res) => {
     } = req.query;
 
     const offset = (parseInt(pagina) - 1) * parseInt(limite);
-    const termoLower = termo.toLowerCase().trim();
+    const termoLower = (termo || '').toLowerCase().trim();
 
     const resultados = {
       veiculos: [],

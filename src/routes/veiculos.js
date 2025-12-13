@@ -207,6 +207,65 @@ router.get('/totais', authRequired, async (req, res) => {
     }
 });
 
+// OCR de KM (stub/placeholder) - DEVE VIR ANTES DE /:id
+router.post('/ocr-km', authRequired, upload.single('imagem'), async (req, res) => {
+  try {
+    // Stub: OCR de KM ainda não implementado
+    // Aceita a requisição mas retorna placeholder
+    res.json({
+      success: false,
+      km_detectado: null,
+      mensagem: 'OCR de KM ainda não implementado. Por favor, insira o KM manualmente.'
+    });
+  } catch (error) {
+    console.error('Erro no OCR de KM (stub):', error);
+    res.status(500).json({ error: 'Erro ao processar OCR de KM' });
+  }
+});
+
+// Atualizar KM de um veículo - DEVE VIR ANTES DE /:id
+router.put('/:id/km', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { km_atual } = req.body;
+    const userId = req.userId;
+
+    // Validações
+    if (!km_atual) {
+      return res.status(400).json({ error: 'km_atual é obrigatório' });
+    }
+
+    const kmNum = parseInt(km_atual.toString().replace(/\D/g, ''), 10);
+    if (isNaN(kmNum) || kmNum <= 0) {
+      return res.status(400).json({ error: 'KM inválido' });
+    }
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(403).json({ error: 'Veículo não encontrado ou não pertence ao usuário' });
+    }
+
+    // Atualizar KM
+    await query(
+      'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
+      [kmNum, id, userId]
+    );
+
+    res.json({ 
+      success: true,
+      mensagem: 'KM atualizado com sucesso'
+    });
+  } catch (error) {
+    console.error('Erro ao atualizar KM:', error);
+    res.status(500).json({ error: 'Erro ao atualizar KM' });
+  }
+});
+
 // Histórico de manutenções de um veículo (DEVE VIR ANTES DE /:id)
 router.get('/:id/historico', authRequired, async (req, res) => {
   try {
