@@ -14,6 +14,10 @@ import proprietariosRouter from './routes/proprietarios.js';
 import veiculosRouter from './routes/veiculos.js';
 import manutencoesRouter from './routes/manutencoes.js';
 import abastecimentosRouter from './routes/abastecimentos.js';
+import alertasRouter from './routes/alertas.js';
+import buscarRouter from './routes/buscar.js';
+import dashboardRouter from './routes/dashboard.js';
+import estatisticasRouter from './routes/estatisticas.js';
 import healthRouter from './routes/health.js';
 
 // Carregar variáveis de ambiente
@@ -95,8 +99,13 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-// Rotas
+// Rotas - Ordem importa: rotas específicas antes de genéricas
+// Dashboard e Alertas devem estar registrados explicitamente
+app.use('/dashboard', dashboardRouter);
+app.use('/alertas', alertasRouter);
 app.use('/auth', authRouter);
+app.use('/buscar', buscarRouter);
+app.use('/estatisticas', estatisticasRouter);
 app.use('/proprietarios', proprietariosRouter);
 app.use('/veiculos', veiculosRouter);
 app.use('/manutencoes', manutencoesRouter);

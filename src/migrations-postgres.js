@@ -227,6 +227,14 @@ const addMissingColumns = async () => {
         await query('ALTER TABLE veiculos ADD COLUMN km_atual INTEGER');
         console.log('  ✓ Coluna km_atual adicionada em veiculos');
       }
+
+      // Tabela veiculos — adicionar coluna tipo_veiculo
+      const tipoVeiculoExists = await columnExists('veiculos', 'tipo_veiculo');
+      if (!tipoVeiculoExists) {
+        console.log('  ✓ Adicionando coluna tipo_veiculo em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN tipo_veiculo VARCHAR(50)');
+        console.log('  ✓ Coluna tipo_veiculo adicionada em veiculos');
+      }
     }
 
     // Criar tabela km_historico se não existir
@@ -245,6 +253,27 @@ const addMissingColumns = async () => {
       console.log('  ✓ Tabela km_historico criada');
     } else {
       console.log('  ✓ Tabela km_historico já existe');
+    }
+
+    // Criar tabela proprietarios_historico se não existir
+    const proprietariosHistoricoExists = await tableExists('proprietarios_historico');
+    if (!proprietariosHistoricoExists) {
+      console.log('  ✓ Criando tabela proprietarios_historico...');
+      await query(`
+        CREATE TABLE IF NOT EXISTS proprietarios_historico (
+          id SERIAL PRIMARY KEY,
+          veiculo_id INTEGER NOT NULL REFERENCES veiculos(id) ON DELETE CASCADE,
+          nome VARCHAR(255) NOT NULL,
+          data_aquisicao DATE NOT NULL,
+          data_venda DATE,
+          km_aquisicao INTEGER,
+          km_venda INTEGER,
+          criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('  ✓ Tabela proprietarios_historico criada');
+    } else {
+      console.log('  ✓ Tabela proprietarios_historico já existe');
     }
 
     // Verificar e adicionar colunas em manutencoes

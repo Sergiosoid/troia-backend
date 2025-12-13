@@ -262,6 +262,14 @@ const addMissingColumns = async (db) => {
         console.log('  ✓ Coluna km_atual adicionada em veiculos');
       }
 
+      // SQLite: adicionar coluna tipo_veiculo a veiculos
+      const tipoVeiculoExists = await columnExists(db, 'veiculos', 'tipo_veiculo');
+      if (!tipoVeiculoExists) {
+        console.log('  ✓ Adicionando coluna tipo_veiculo em veiculos...');
+        await runSQL(db, 'ALTER TABLE veiculos ADD COLUMN tipo_veiculo TEXT').catch(() => {});
+        console.log('  ✓ Coluna tipo_veiculo adicionada em veiculos');
+      }
+
       // Verificar se placa tem UNIQUE (não pode adicionar via ALTER, mas verificamos)
       const placaExists = await columnExists(db, 'veiculos', 'placa');
       if (!placaExists) {
@@ -286,6 +294,28 @@ const addMissingColumns = async (db) => {
       console.log('  ✓ Tabela km_historico criada');
     } else {
       console.log('  ✓ Tabela km_historico já existe');
+    }
+
+    // SQLite: criar tabela proprietarios_historico
+    const proprietariosHistoricoExists = await tableExists(db, 'proprietarios_historico');
+    if (!proprietariosHistoricoExists) {
+      console.log('  ✓ Criando tabela proprietarios_historico...');
+      await runSQL(db, `
+        CREATE TABLE IF NOT EXISTS proprietarios_historico (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          veiculo_id INTEGER NOT NULL,
+          nome TEXT NOT NULL,
+          data_aquisicao TEXT NOT NULL,
+          data_venda TEXT,
+          km_aquisicao INTEGER,
+          km_venda INTEGER,
+          criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (veiculo_id) REFERENCES veiculos(id) ON DELETE CASCADE
+        )
+      `);
+      console.log('  ✓ Tabela proprietarios_historico criada');
+    } else {
+      console.log('  ✓ Tabela proprietarios_historico já existe');
     }
 
     // Verificar e adicionar colunas em manutencoes (SEM ACENTO)

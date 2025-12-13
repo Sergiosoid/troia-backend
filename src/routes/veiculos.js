@@ -40,7 +40,7 @@ router.get('/', authRequired, async (req, res) => {
 // Criar novo veículo
 router.post('/', authRequired, async (req, res) => {
   try {
-    const { placa, renavam, proprietario_id, marca, modelo, ano } = req.body;
+    const { placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo } = req.body;
 
     // Validações simplificadas: apenas modelo e ano são obrigatórios
     if (!modelo || !modelo.trim()) {
@@ -53,8 +53,8 @@ router.post('/', authRequired, async (req, res) => {
 
     // Inserir veículo (proprietario_id pode ser null)
     const result = await query(
-      `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, usuario_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         placa ? placa.trim().toUpperCase() : null,
         renavam ? renavam.trim() : null,
@@ -62,6 +62,7 @@ router.post('/', authRequired, async (req, res) => {
         marca ? marca.trim() : null,
         modelo.trim(),
         ano.trim(),
+        tipo_veiculo || null,
         req.userId
       ]
     );
@@ -117,7 +118,7 @@ router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), async 
 // Listar veículos por proprietário
 router.get('/proprietario/:id', authRequired, async (req, res) => {
   try {
-    const id = req.params.id;
+  const id = req.params.id;
     const userId = req.userId; // Do middleware JWT
 
     const rows = await queryAll(
@@ -135,7 +136,7 @@ router.get('/proprietario/:id', authRequired, async (req, res) => {
 // SEGURANÇA: Filtra obrigatoriamente por usuario_id para prevenir acesso não autorizado
 router.get('/buscar-placa/:placa', authRequired, async (req, res) => {
   try {
-    const placa = req.params.placa.toUpperCase();
+  const placa = req.params.placa.toUpperCase();
     const userId = req.userId; // Do middleware JWT
     
     // Validação adicional: userId deve ser numérico
@@ -153,10 +154,10 @@ router.get('/buscar-placa/:placa', authRequired, async (req, res) => {
 
     // Query com filtro obrigatório por usuario_id (prevenção de acesso não autorizado)
     const row = await queryOne(
-      `SELECT v.*, p.nome as proprietarioNome 
-       FROM veiculos v 
-       LEFT JOIN proprietarios p ON v.proprietario_id = p.id 
-       WHERE v.placa = ? AND v.usuario_id = ?`,
+    `SELECT v.*, p.nome as proprietarioNome 
+     FROM veiculos v 
+     LEFT JOIN proprietarios p ON v.proprietario_id = p.id 
+     WHERE v.placa = ? AND v.usuario_id = ?`,
       [placaSanitizada, userIdNum]
     );
     
@@ -179,48 +180,174 @@ router.get('/totais', authRequired, async (req, res) => {
     const userId = req.userId; // Do middleware JWT
 
     const rows = await queryAll(
-      `SELECT 
-        v.id,
-        v.placa,
-        v.renavam,
-        v.proprietario_id,
-        p.nome as proprietarioNome,
-        COALESCE(SUM(m.valor), 0) as totalGasto,
-        MAX(m.data) as ultimaData
-      FROM veiculos v
-      LEFT JOIN proprietarios p ON v.proprietario_id = p.id
-      LEFT JOIN manutencoes m ON v.id = m.veiculo_id AND m.usuario_id = ?
-      WHERE v.usuario_id = ?
-      GROUP BY v.id, v.placa, v.renavam, v.proprietario_id, p.nome
-      ORDER BY v.placa`,
+    `SELECT 
+      v.id,
+      v.placa,
+      v.renavam,
+        v.marca,
+        v.modelo,
+        v.ano,
+        v.km_atual,
+      v.proprietario_id,
+      p.nome as proprietarioNome,
+      COALESCE(SUM(m.valor), 0) as totalGasto,
+      MAX(m.data) as ultimaData
+    FROM veiculos v
+    LEFT JOIN proprietarios p ON v.proprietario_id = p.id
+    LEFT JOIN manutencoes m ON v.id = m.veiculo_id AND m.usuario_id = ?
+    WHERE v.usuario_id = ?
+      GROUP BY v.id, v.placa, v.renavam, v.marca, v.modelo, v.ano, v.km_atual, v.proprietario_id, p.nome
+    ORDER BY v.placa`,
       [userId, userId]
     );
-    res.json(rows);
+      res.json(rows);
   } catch (error) {
     console.error('[ERRO] Erro ao listar veículos com totais:', error);
     return res.status(500).json({ error: error.message || 'Erro ao listar veículos' });
-  }
+    }
 });
 
 // Histórico de manutenções de um veículo (DEVE VIR ANTES DE /:id)
 router.get('/:id/historico', authRequired, async (req, res) => {
   try {
-    const id = req.params.id;
+  const id = req.params.id;
     const userId = req.userId; // Do middleware JWT
 
     const rows = await queryAll(
-      `SELECT m.*, v.placa, v.renavam, p.nome as proprietarioNome
-       FROM manutencoes m
-       LEFT JOIN veiculos v ON m.veiculo_id = v.id
-       LEFT JOIN proprietarios p ON v.proprietario_id = p.id
-       WHERE m.veiculo_id = ? AND m.usuario_id = ?
-       ORDER BY m.data DESC, m.id DESC`,
+    `SELECT m.*, v.placa, v.renavam, p.nome as proprietarioNome
+     FROM manutencoes m
+     LEFT JOIN veiculos v ON m.veiculo_id = v.id
+     LEFT JOIN proprietarios p ON v.proprietario_id = p.id
+     WHERE m.veiculo_id = ? AND m.usuario_id = ?
+     ORDER BY m.data DESC, m.id DESC`,
       [id, userId]
     );
-    res.json(rows || []);
+      res.json(rows || []);
   } catch (error) {
     console.error('[ERRO] Erro ao buscar histórico:', error);
     return res.status(500).json({ error: error.message || 'Erro ao buscar histórico' });
+    }
+});
+
+// Listar histórico de proprietários de um veículo (DEVE VIR ANTES DE /:id)
+router.get('/:id/proprietarios-historico', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT * FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Buscar histórico
+    const historico = await queryAll(
+      'SELECT * FROM proprietarios_historico WHERE veiculo_id = ? ORDER BY data_aquisicao DESC',
+      [id]
+    );
+
+    res.json(historico || []);
+  } catch (err) {
+    console.error('Erro ao listar histórico de proprietários:', err);
+    res.status(500).json({ error: 'Erro ao listar histórico de proprietários' });
+  }
+});
+
+// Adicionar proprietário ao histórico (DEVE VIR ANTES DE /:id)
+router.post('/:id/proprietarios-historico', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { nome, data_aquisicao, data_venda, km_aquisicao, km_venda } = req.body;
+    const userId = req.userId;
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT * FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Validações
+    if (!nome || !nome.trim()) {
+      return res.status(400).json({ error: 'Nome é obrigatório' });
+    }
+
+    if (!data_aquisicao) {
+      return res.status(400).json({ error: 'Data de aquisição é obrigatória' });
+    }
+
+    // Inserir histórico
+    const result = await query(
+      `INSERT INTO proprietarios_historico (veiculo_id, nome, data_aquisicao, data_venda, km_aquisicao, km_venda)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        nome.trim(),
+        data_aquisicao,
+        data_venda || null,
+        km_aquisicao || null,
+        km_venda || null
+      ]
+    );
+
+    res.json({
+      success: true,
+      id: result.insertId,
+      mensagem: 'Proprietário adicionado ao histórico com sucesso'
+    });
+  } catch (err) {
+    console.error('Erro ao adicionar proprietário ao histórico:', err);
+    res.status(500).json({ error: 'Erro ao adicionar proprietário ao histórico' });
+  }
+});
+
+// Remover proprietário do histórico (DEVE VIR ANTES DE /:id)
+router.delete('/:veiculoId/proprietarios-historico/:historicoId', authRequired, async (req, res) => {
+  try {
+    const { veiculoId, historicoId } = req.params;
+    const userId = req.userId;
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT * FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [veiculoId, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Verificar se histórico existe e pertence ao veículo
+    const historico = await queryOne(
+      'SELECT * FROM proprietarios_historico WHERE id = ? AND veiculo_id = ?',
+      [historicoId, veiculoId]
+    );
+
+    if (!historico) {
+      return res.status(404).json({ error: 'Registro de histórico não encontrado' });
+    }
+
+    // Deletar histórico
+    await query(
+      'DELETE FROM proprietarios_historico WHERE id = ? AND veiculo_id = ?',
+      [historicoId, veiculoId]
+    );
+
+    res.json({
+      success: true,
+      mensagem: 'Registro removido do histórico com sucesso'
+    });
+  } catch (err) {
+    console.error('Erro ao remover proprietário do histórico:', err);
+    res.status(500).json({ error: 'Erro ao remover proprietário do histórico' });
   }
 });
 
@@ -228,7 +355,7 @@ router.get('/:id/historico', authRequired, async (req, res) => {
 // SEGURANÇA: Filtra obrigatoriamente por usuario_id para prevenir acesso não autorizado
 router.get('/:id', authRequired, async (req, res) => {
   try {
-    const id = req.params.id;
+  const id = req.params.id;
     const userId = req.userId; // Do middleware JWT
     
     // Validação adicional: userId deve ser numérico
@@ -413,6 +540,59 @@ router.post('/:id/solicitar-relatorio', authRequired, async (req, res) => {
   } catch (err) {
     console.error('Erro ao solicitar relatório:', err);
     res.status(500).json({ error: 'Erro ao solicitar relatório' });
+  }
+});
+
+// Atualizar veículo
+router.put('/:id', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { placa, renavam, marca, modelo, ano, tipo_veiculo } = req.body;
+    const userId = req.userId;
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT * FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Validações
+    if (!modelo || !modelo.trim()) {
+      return res.status(400).json({ error: 'Modelo é obrigatório' });
+    }
+
+    if (!ano || !ano.trim()) {
+      return res.status(400).json({ error: 'Ano é obrigatório' });
+    }
+
+    // Atualizar veículo
+    await query(
+      `UPDATE veiculos 
+       SET placa = ?, renavam = ?, marca = ?, modelo = ?, ano = ?, tipo_veiculo = ?
+       WHERE id = ? AND usuario_id = ?`,
+      [
+        placa ? placa.trim().toUpperCase() : null,
+        renavam ? renavam.trim() : null,
+        marca ? marca.trim() : null,
+        modelo.trim(),
+        ano.trim(),
+        tipo_veiculo || null,
+        id,
+        userId
+      ]
+    );
+
+    res.json({
+      success: true,
+      mensagem: 'Veículo atualizado com sucesso'
+    });
+  } catch (err) {
+    console.error('Erro ao atualizar veículo:', err);
+    res.status(500).json({ error: 'Erro ao atualizar veículo' });
   }
 });
 
