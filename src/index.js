@@ -21,6 +21,8 @@ import estatisticasRouter from './routes/estatisticas.js';
 import healthRouter from './routes/health.js';
 import compartilhamentoRouter from './routes/compartilhamento.js';
 import usuariosRouter from './routes/usuarios.js';
+import fabricantesRouter from './routes/fabricantes.js';
+import modelosRouter from './routes/modelos.js';
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -115,6 +117,8 @@ app.use('/proprietarios', proprietariosRouter);
 app.use('/veiculos', veiculosRouter);
 app.use('/manutencoes', manutencoesRouter);
 app.use('/abastecimentos', abastecimentosRouter);
+app.use('/fabricantes', fabricantesRouter);
+app.use('/modelos', modelosRouter);
 app.use('/healthz', healthRouter);
 
 // Inicializar cliente OpenAI

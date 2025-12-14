@@ -545,6 +545,25 @@ const addMissingColumns = async () => {
       console.log('  ✓ Tabela modelos já existe');
     }
 
+    // Tabela anos_modelo (opcional - para granularidade maior)
+    const anosModeloExists = await tableExists('anos_modelo');
+    if (!anosModeloExists) {
+      console.log('  ✓ Criando tabela anos_modelo...');
+      await query(`
+        CREATE TABLE IF NOT EXISTS anos_modelo (
+          id SERIAL PRIMARY KEY,
+          modelo_id INTEGER NOT NULL REFERENCES modelos(id) ON DELETE CASCADE,
+          ano INTEGER NOT NULL,
+          ativo BOOLEAN NOT NULL DEFAULT true,
+          UNIQUE(modelo_id, ano)
+        )
+      `);
+      await query('CREATE INDEX IF NOT EXISTS idx_anos_modelo_modelo ON anos_modelo(modelo_id)');
+      console.log('  ✓ Tabela anos_modelo criada');
+    } else {
+      console.log('  ✓ Tabela anos_modelo já existe');
+    }
+
     // Adicionar colunas em veiculos para dados mestres (mantendo compatibilidade)
     const veiculosExists = await tableExists('veiculos');
     if (veiculosExists) {
@@ -574,6 +593,13 @@ const addMissingColumns = async () => {
         console.log('  ✓ Adicionando coluna dados_nao_padronizados em veiculos...');
         await query('ALTER TABLE veiculos ADD COLUMN dados_nao_padronizados BOOLEAN DEFAULT false');
         console.log('  ✓ Coluna dados_nao_padronizados adicionada');
+      }
+
+      const origemDadosExists = await columnExists('veiculos', 'origem_dados');
+      if (!origemDadosExists) {
+        console.log('  ✓ Adicionando coluna origem_dados em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN origem_dados VARCHAR(20) DEFAULT \'manual\'');
+        console.log('  ✓ Coluna origem_dados adicionada');
       }
     }
 
@@ -696,6 +722,15 @@ const addMissingColumns = async () => {
     } catch (migError) {
       console.warn('  ⚠ Erro ao migrar dados legados (pode ser normal se não houver dados):', migError.message);
       // Não bloquear se falhar (pode não haver dados para migrar)
+    }
+
+    // Executar seed de dados mestres
+    try {
+      const { seedDadosMestres } = await import('./seed-dados-mestres.js');
+      await seedDadosMestres();
+    } catch (seedError) {
+      console.warn('  ⚠ Erro ao executar seed (pode ser normal se dados já existirem):', seedError.message);
+      // Não bloquear se falhar
     }
 
   } catch (error) {

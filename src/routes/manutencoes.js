@@ -104,11 +104,30 @@ router.post('/cadastrar', authRequired, requireRole('admin', 'operador'), upload
       });
     }
 
-    // Validar que existe proprietário atual válido (com data_inicio e km_inicio)
+    // Validar que existe proprietário atual válido
+    // Aceitar data_inicio/km_inicio OU data_aquisicao/km_aquisicao (compatibilidade)
     const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
     const proprietarioAtual = await getProprietarioAtual(veiculo_id);
     
-    if (!proprietarioAtual || !proprietarioAtual.data_inicio || proprietarioAtual.km_inicio === null || proprietarioAtual.km_inicio === undefined) {
+    if (!proprietarioAtual) {
+      console.error('[POST /manutencoes/cadastrar] Veículo sem proprietário atual:', veiculo_id);
+      return res.status(400).json({ 
+        error: 'Não é possível cadastrar manutenção. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
+        code: 'PERIODO_POSSE_INVALIDO'
+      });
+    }
+    
+    // Verificar se tem data e KM válidos (aceitar data_inicio/km_inicio OU data_aquisicao/km_aquisicao)
+    const temData = proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao;
+    const temKm = (proprietarioAtual.km_inicio !== null && proprietarioAtual.km_inicio !== undefined) ||
+                  (proprietarioAtual.km_aquisicao !== null && proprietarioAtual.km_aquisicao !== undefined);
+    
+    if (!temData || !temKm) {
+      console.error('[POST /manutencoes/cadastrar] Período de posse incompleto:', {
+        veiculoId: veiculo_id,
+        temData,
+        temKm
+      });
       return res.status(400).json({ 
         error: 'Não é possível cadastrar manutenção. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
         code: 'PERIODO_POSSE_INVALIDO'
