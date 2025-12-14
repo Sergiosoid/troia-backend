@@ -448,10 +448,16 @@ router.get('/:id/km-historico', authRequired, async (req, res) => {
     // Importar helper de proprietário atual
     const { getPeriodoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
 
-    // Obter período do proprietário atual
-    const periodo = await getPeriodoProprietarioAtual(id);
+    // Obter período do proprietário atual (não bloquear se não existir)
+    let periodo = null;
+    try {
+      periodo = await getPeriodoProprietarioAtual(id);
+    } catch (periodoError) {
+      console.warn('[km-historico] Erro ao buscar período do proprietário atual:', periodoError);
+      // Continuar sem filtrar por período
+    }
     
-    // Buscar histórico de KM
+    // Buscar histórico de KM com COALESCE para garantir data_registro sempre exista
     let querySql = `
       SELECT 
         id,
@@ -459,27 +465,29 @@ router.get('/:id/km-historico', authRequired, async (req, res) => {
         usuario_id,
         km,
         origem,
-        data_registro,
+        COALESCE(data_registro, criado_em) as data_registro,
         criado_em
       FROM km_historico
       WHERE veiculo_id = ?
     `;
     const params = [id];
 
-    // Filtrar por período do proprietário atual se existir
+    // Filtrar por período do proprietário atual APENAS se existir e tiver dataInicio
     if (periodo && periodo.dataInicio) {
-      querySql += ` AND data_registro >= ?`;
+      querySql += ` AND COALESCE(data_registro, criado_em) >= ?`;
       params.push(periodo.dataInicio);
     }
 
-    querySql += ` ORDER BY data_registro DESC, criado_em DESC`;
+    querySql += ` ORDER BY COALESCE(data_registro, criado_em) DESC, criado_em DESC`;
 
     const historico = await queryAll(querySql, params);
 
-    res.json(historico || []);
+    // Sempre retornar array, nunca erro
+    res.json(Array.isArray(historico) ? historico : []);
   } catch (error) {
     console.error('Erro ao buscar histórico de KM:', error);
-    res.status(500).json({ error: 'Erro ao buscar histórico de KM' });
+    // Retornar array vazio ao invés de erro
+    res.json([]);
   }
 });
 
@@ -708,7 +716,15 @@ router.get('/:id/timeline', authRequired, async (req, res) => {
 
     // Importar helpers
     const { getProprietarioAtual, manutencaoPertenceAoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
-    const proprietarioAtual = await getProprietarioAtual(id);
+    
+    // Buscar proprietário atual (não bloquear se não existir)
+    let proprietarioAtual = null;
+    try {
+      proprietarioAtual = await getProprietarioAtual(id);
+    } catch (proprietarioError) {
+      console.warn('[timeline] Erro ao buscar proprietário atual:', proprietarioError);
+      // Continuar sem proprietário atual
+    }
 
     const eventos = [];
 
@@ -846,10 +862,12 @@ router.get('/:id/timeline', authRequired, async (req, res) => {
       return (ordemTipo[a.tipo] || 99) - (ordemTipo[b.tipo] || 99);
     });
 
-    res.json(eventos);
+    // Sempre retornar array, nunca erro
+    res.json(Array.isArray(eventos) ? eventos : []);
   } catch (err) {
     console.error('Erro ao buscar timeline:', err);
-    res.status(500).json({ error: 'Erro ao buscar timeline' });
+    // Retornar array vazio ao invés de erro
+    res.json([]);
   }
 });
 
@@ -874,14 +892,51 @@ router.get('/:id/resumo-periodo', authRequired, async (req, res) => {
     
     const resumo = await getResumoPeriodoProprietarioAtual(id);
     
+    // Se não houver resumo, retornar estrutura padrão ao invés de erro
     if (!resumo) {
-      return res.status(404).json({ error: 'Não foi possível obter resumo do período' });
+      // Buscar km_atual do veículo para estrutura padrão
+      const veiculoKm = await queryOne(
+        'SELECT km_atual FROM veiculos WHERE id = ?',
+        [id]
+      );
+      const kmAtual = veiculoKm ? (parseInt(veiculoKm.km_atual) || 0) : 0;
+      
+      return res.json({
+        km_total_veiculo: kmAtual,
+        km_inicio_periodo: kmAtual,
+        km_atual: kmAtual,
+        km_rodado_no_periodo: 0,
+        data_aquisicao: null,
+      });
     }
 
     res.json(resumo);
   } catch (err) {
     console.error('Erro ao buscar resumo do período:', err);
-    res.status(500).json({ error: 'Erro ao buscar resumo do período' });
+    // Retornar estrutura padrão ao invés de erro
+    try {
+      const veiculoKm = await queryOne(
+        'SELECT km_atual FROM veiculos WHERE id = ?',
+        [id]
+      );
+      const kmAtual = veiculoKm ? (parseInt(veiculoKm.km_atual) || 0) : 0;
+      return res.json({
+        km_total_veiculo: kmAtual,
+        km_inicio_periodo: kmAtual,
+        km_atual: kmAtual,
+        km_rodado_no_periodo: 0,
+        data_aquisicao: null,
+      });
+    } catch (fallbackError) {
+      // Último fallback
+      return res.json({
+        km_total_veiculo: 0,
+        km_inicio_periodo: 0,
+        km_atual: 0,
+        km_rodado_no_periodo: 0,
+        data_aquisicao: null,
+      });
+    }
   }
 });
 

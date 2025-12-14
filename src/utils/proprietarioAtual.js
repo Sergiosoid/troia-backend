@@ -109,14 +109,32 @@ export async function getResumoPeriodoProprietarioAtual(veiculoId) {
       return null;
     }
     
-    // Buscar proprietário atual
+    const kmAtual = parseInt(veiculo.km_atual) || 0;
+    
+    // Buscar proprietário atual (não bloquear se não existir)
     const proprietarioAtual = await getProprietarioAtual(veiculoId);
     
+    // Se não houver proprietário atual, retornar estrutura padrão
     if (!proprietarioAtual) {
-      return null;
+      // Buscar KM mínimo do histórico (KM total do veículo)
+      const kmHistorico = await queryAll(
+        'SELECT MIN(km) as km_minimo FROM km_historico WHERE veiculo_id = ?',
+        [veiculoId]
+      );
+      
+      const kmTotalVeiculo = kmHistorico && kmHistorico[0] && kmHistorico[0].km_minimo 
+        ? parseInt(kmHistorico[0].km_minimo) 
+        : kmAtual;
+      
+      return {
+        km_total_veiculo: kmTotalVeiculo,
+        km_inicio_periodo: kmAtual,
+        km_atual: kmAtual,
+        km_rodado_no_periodo: 0,
+        data_aquisicao: null,
+      };
     }
     
-    const kmAtual = parseInt(veiculo.km_atual) || 0;
     const kmInicioPeriodo = parseInt(proprietarioAtual.km_aquisicao) || 0;
     
     // Buscar KM mínimo do histórico (KM total do veículo)
