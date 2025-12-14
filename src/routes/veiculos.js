@@ -50,45 +50,70 @@ router.post('/', authRequired, async (req, res) => {
       ano, 
       tipo_veiculo,
       origem_posse, // 'zero_km' ou 'usado'
-      data_aquisicao, // Data de aquisição (obrigatória)
-      km_inicio // KM inicial (obrigatório se usado)
+      data_aquisicao, // Data de aquisição (obrigatória) - formato YYYY-MM-DD
+      km_aquisicao // KM inicial (obrigatório) - aceita km_inicio para compatibilidade
     } = req.body;
 
-    // Validações obrigatórias
+    // Validações obrigatórias básicas
     if (!modelo || !modelo.trim()) {
-      return res.status(400).json({ error: 'Modelo é obrigatório' });
+      return res.status(400).json({ 
+        error: 'Modelo é obrigatório',
+        code: 'AQUISICAO_OBRIGATORIA'
+      });
     }
 
     if (!ano || !ano.trim()) {
-      return res.status(400).json({ error: 'Ano é obrigatório' });
+      return res.status(400).json({ 
+        error: 'Ano é obrigatório',
+        code: 'AQUISICAO_OBRIGATORIA'
+      });
     }
 
+    // Validações de aquisição (OBRIGATÓRIAS)
     if (!origem_posse || !['zero_km', 'usado'].includes(origem_posse)) {
-      return res.status(400).json({ error: 'Origem da posse é obrigatória. Informe "zero_km" ou "usado"' });
+      return res.status(400).json({ 
+        error: 'Tipo de aquisição é obrigatório. Informe "zero_km" ou "usado"',
+        code: 'AQUISICAO_OBRIGATORIA'
+      });
     }
 
     if (!data_aquisicao) {
-      return res.status(400).json({ error: 'Data de aquisição é obrigatória' });
+      return res.status(400).json({ 
+        error: 'Data de aquisição é obrigatória',
+        code: 'AQUISICAO_OBRIGATORIA'
+      });
     }
 
+    // Aceitar km_aquisicao ou km_inicio (compatibilidade)
+    const kmAquisicaoRecebido = km_aquisicao !== undefined ? km_aquisicao : req.body.km_inicio;
+    
     // Se usado, KM inicial é obrigatório
-    if (origem_posse === 'usado' && (!km_inicio || parseInt(km_inicio) < 0)) {
-      return res.status(400).json({ error: 'KM inicial é obrigatório para veículos usados' });
+    if (origem_posse === 'usado' && (kmAquisicaoRecebido === undefined || kmAquisicaoRecebido === null || parseInt(kmAquisicaoRecebido) < 0)) {
+      return res.status(400).json({ 
+        error: 'KM inicial é obrigatório para veículos usados',
+        code: 'AQUISICAO_OBRIGATORIA'
+      });
     }
 
     // Se zero km, KM inicial é 0
-    const kmInicioFinal = origem_posse === 'zero_km' ? 0 : parseInt(km_inicio) || 0;
+    const kmAquisicaoFinal = origem_posse === 'zero_km' ? 0 : parseInt(kmAquisicaoRecebido) || 0;
 
     // Validar formato da data de aquisição
     const dataAquisicaoValida = data_aquisicao && /^\d{4}-\d{2}-\d{2}$/.test(data_aquisicao);
     if (!dataAquisicaoValida) {
-      return res.status(400).json({ error: 'Data de aquisição inválida. Use o formato YYYY-MM-DD' });
+      return res.status(400).json({ 
+        error: 'Data de aquisição inválida. Use o formato YYYY-MM-DD',
+        code: 'AQUISICAO_OBRIGATORIA'
+      });
     }
 
     // Verificar se data não é futura
     const dataAquisicaoDate = new Date(data_aquisicao);
     if (isNaN(dataAquisicaoDate.getTime()) || dataAquisicaoDate > new Date()) {
-      return res.status(400).json({ error: 'Data de aquisição inválida ou futura' });
+      return res.status(400).json({ 
+        error: 'Data de aquisição inválida ou futura',
+        code: 'AQUISICAO_OBRIGATORIA'
+      });
     }
 
     // Verificar unicidade por PLACA (se fornecido)
@@ -191,7 +216,7 @@ router.post('/', authRequired, async (req, res) => {
             ano.trim(),
             tipo_veiculo || null,
             req.userId,
-            kmInicioFinal
+            kmAquisicaoFinal
           ]
         );
         id = result.insertId || null;
@@ -251,9 +276,9 @@ router.post('/', authRequired, async (req, res) => {
           req.userId,
           nomeProprietario,
           data_aquisicao,
-          kmInicioFinal,
+          kmAquisicaoFinal,
           data_aquisicao,
-          kmInicioFinal,
+          kmAquisicaoFinal,
           origem_posse
         ]
       );
@@ -266,17 +291,22 @@ router.post('/', authRequired, async (req, res) => {
       });
     }
 
-    // Criar registro inicial em km_historico
+    // Criar registro inicial em km_historico com data_registro = data_aquisicao
     try {
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-         VALUES (?, ?, ?, 'inicio_posse', ${timestampFunc}, ${timestampFunc})`,
-        [id, req.userId, kmInicioFinal]
+         VALUES (?, ?, ?, 'inicio_posse', ?, ${timestampFunc})`,
+        [id, req.userId, kmAquisicaoFinal, data_aquisicao]
       );
     } catch (kmError) {
-      // Se falhar ao criar KM histórico, logar mas não reverter (veículo já foi criado)
-      console.error('[ERRO] Falha ao criar registro inicial de KM:', kmError.message);
-      // Continuar, pois o veículo já foi criado e o histórico de proprietário também
+      // Se falhar ao criar KM histórico, reverter criação do veículo e histórico de proprietário
+      await query('DELETE FROM proprietarios_historico WHERE veiculo_id = ?', [id]);
+      await query('DELETE FROM veiculos WHERE id = ?', [id]);
+      console.error('[ERRO CRÍTICO] Falha ao criar registro inicial de KM:', kmError.message);
+      return res.status(500).json({ 
+        error: 'Erro ao criar histórico de KM. O veículo não foi cadastrado.',
+        code: 'ERRO_CRIACAO_HISTORICO'
+      });
     }
 
     return res.json({
@@ -1513,5 +1543,94 @@ router.put('/:id', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Erro ao atualizar veículo' });
   }
 });
+
+// ============================================
+// ENDPOINTS DE DADOS MESTRES (Fabricantes/Modelos)
+// ============================================
+
+/**
+ * GET /veiculos/fabricantes
+ * Lista todos os fabricantes ativos
+ */
+router.get('/fabricantes', authRequired, async (req, res) => {
+  try {
+    const fabricantes = await queryAll(
+      'SELECT id, nome FROM fabricantes WHERE ativo = true ORDER BY nome ASC'
+    );
+    res.json(fabricantes || []);
+  } catch (error) {
+    console.error('Erro ao listar fabricantes:', error);
+    res.status(500).json({ error: 'Erro ao listar fabricantes' });
+  }
+});
+
+/**
+ * GET /veiculos/modelos/:fabricanteId
+ * Lista modelos de um fabricante específico
+ */
+router.get('/modelos/:fabricanteId', authRequired, async (req, res) => {
+  try {
+    const { fabricanteId } = req.params;
+    const modelos = await queryAll(
+      'SELECT id, nome, ano_inicio, ano_fim FROM modelos WHERE fabricante_id = ? AND ativo = true ORDER BY nome ASC',
+      [fabricanteId]
+    );
+    res.json(modelos || []);
+  } catch (error) {
+    console.error('Erro ao listar modelos:', error);
+    res.status(500).json({ error: 'Erro ao listar modelos' });
+  }
+});
+
+/**
+ * GET /veiculos/anos-modelo/:modeloId
+ * Retorna intervalo de anos válidos para um modelo
+ */
+router.get('/anos-modelo/:modeloId', authRequired, async (req, res) => {
+  try {
+    const { modeloId } = req.params;
+    const modelo = await queryOne(
+      'SELECT ano_inicio, ano_fim FROM modelos WHERE id = ?',
+      [modeloId]
+    );
+    
+    if (!modelo) {
+      return res.status(404).json({ error: 'Modelo não encontrado' });
+    }
+    
+    const anos = [];
+    const inicio = modelo.ano_inicio || 1950;
+    const fim = modelo.ano_fim || new Date().getFullYear();
+    
+    for (let ano = inicio; ano <= fim; ano++) {
+      anos.push(ano);
+    }
+    
+    res.json(anos);
+  } catch (error) {
+    console.error('Erro ao buscar anos do modelo:', error);
+    res.status(500).json({ error: 'Erro ao buscar anos do modelo' });
+  }
+});
+
+// ============================================
+// TODO: ENDPOINTS PARA OCR E IA (FUTURO)
+// ============================================
+/*
+ * POST /veiculos/ocr-documento
+ * Processa OCR de documento do veículo (CRLV)
+ * Retorna: placa, renavam, fabricante, modelo, ano
+ * 
+ * TODO: Implementar integração com OpenAI Vision API ou serviço similar
+ * TODO: Validar dados extraídos contra dados mestres
+ * TODO: Marcar origem_dados = 'ocr'
+ */
+
+/*
+ * POST /veiculos/ocr-cnh
+ * Processa OCR de CNH para extrair dados do proprietário
+ * 
+ * TODO: Implementar quando necessário
+ */
 
 export default router;

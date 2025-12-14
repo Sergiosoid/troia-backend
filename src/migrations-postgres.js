@@ -503,6 +503,80 @@ const addMissingColumns = async () => {
 
     console.log('  ✓ Todas as colunas verificadas');
 
+    // Criar tabelas de dados mestres (fabricantes e modelos)
+    console.log('  📋 Criando tabelas de dados mestres...');
+    
+    // Tabela fabricantes
+    const fabricantesExists = await tableExists('fabricantes');
+    if (!fabricantesExists) {
+      console.log('  ✓ Criando tabela fabricantes...');
+      await query(`
+        CREATE TABLE IF NOT EXISTS fabricantes (
+          id SERIAL PRIMARY KEY,
+          nome VARCHAR(100) NOT NULL UNIQUE,
+          ativo BOOLEAN NOT NULL DEFAULT true,
+          criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('  ✓ Tabela fabricantes criada');
+    } else {
+      console.log('  ✓ Tabela fabricantes já existe');
+    }
+
+    // Tabela modelos
+    const modelosExists = await tableExists('modelos');
+    if (!modelosExists) {
+      console.log('  ✓ Criando tabela modelos...');
+      await query(`
+        CREATE TABLE IF NOT EXISTS modelos (
+          id SERIAL PRIMARY KEY,
+          fabricante_id INTEGER NOT NULL REFERENCES fabricantes(id) ON DELETE CASCADE,
+          nome VARCHAR(100) NOT NULL,
+          ano_inicio INTEGER,
+          ano_fim INTEGER,
+          ativo BOOLEAN NOT NULL DEFAULT true,
+          criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(fabricante_id, nome)
+        )
+      `);
+      await query('CREATE INDEX IF NOT EXISTS idx_modelos_fabricante ON modelos(fabricante_id)');
+      console.log('  ✓ Tabela modelos criada');
+    } else {
+      console.log('  ✓ Tabela modelos já existe');
+    }
+
+    // Adicionar colunas em veiculos para dados mestres (mantendo compatibilidade)
+    const veiculosExists = await tableExists('veiculos');
+    if (veiculosExists) {
+      const fabricanteIdExists = await columnExists('veiculos', 'fabricante_id');
+      if (!fabricanteIdExists) {
+        console.log('  ✓ Adicionando coluna fabricante_id em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN fabricante_id INTEGER REFERENCES fabricantes(id) ON DELETE SET NULL');
+        console.log('  ✓ Coluna fabricante_id adicionada');
+      }
+
+      const modeloIdExists = await columnExists('veiculos', 'modelo_id');
+      if (!modeloIdExists) {
+        console.log('  ✓ Adicionando coluna modelo_id em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN modelo_id INTEGER REFERENCES modelos(id) ON DELETE SET NULL');
+        console.log('  ✓ Coluna modelo_id adicionada');
+      }
+
+      const anoModeloExists = await columnExists('veiculos', 'ano_modelo');
+      if (!anoModeloExists) {
+        console.log('  ✓ Adicionando coluna ano_modelo em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN ano_modelo INTEGER');
+        console.log('  ✓ Coluna ano_modelo adicionada');
+      }
+
+      const dadosNaoPadronizadosExists = await columnExists('veiculos', 'dados_nao_padronizados');
+      if (!dadosNaoPadronizadosExists) {
+        console.log('  ✓ Adicionando coluna dados_nao_padronizados em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN dados_nao_padronizados BOOLEAN DEFAULT false');
+        console.log('  ✓ Coluna dados_nao_padronizados adicionada');
+      }
+    }
+
     // Migração de dados legados: corrigir proprietarios_historico com dados incompletos
     console.log('  🔄 Migrando dados legados de proprietarios_historico...');
     try {
