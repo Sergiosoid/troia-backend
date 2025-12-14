@@ -98,7 +98,18 @@ router.post('/ocr', authRequired, upload.single('imagem'), async (req, res) => {
  */
 router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
   try {
-    const { veiculo_id } = req.body;
+    const userId = req.userId;
+    const {
+      veiculo_id,
+      litros,
+      valor_total,
+      preco_por_litro,
+      tipo_combustivel,
+      posto,
+      km_antes,
+      km_depois,
+      data
+    } = req.body;
     
     // Validar que existe proprietário atual válido (com data_inicio e km_inicio)
     if (veiculo_id) {
@@ -112,18 +123,6 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
         });
       }
     }
-    const userId = req.userId;
-    const {
-      veiculo_id,
-      litros,
-      valor_total,
-      preco_por_litro,
-      tipo_combustivel,
-      posto,
-      km_antes,
-      km_depois,
-      data
-    } = req.body;
 
     // Validações obrigatórias
     if (!veiculo_id) {
