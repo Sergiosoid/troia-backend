@@ -90,3 +90,58 @@ export async function getPeriodoProprietarioAtual(veiculoId) {
   }
 }
 
+/**
+ * Obtém resumo do período do proprietário atual
+ * @param {number} veiculoId - ID do veículo
+ * @returns {Promise<Object|null>} Resumo do período ou null
+ */
+export async function getResumoPeriodoProprietarioAtual(veiculoId) {
+  try {
+    const { query, queryOne, queryAll } = await import('../database/db-adapter.js');
+    
+    // Buscar veículo
+    const veiculo = await queryOne(
+      'SELECT km_atual FROM veiculos WHERE id = ?',
+      [veiculoId]
+    );
+    
+    if (!veiculo) {
+      return null;
+    }
+    
+    // Buscar proprietário atual
+    const proprietarioAtual = await getProprietarioAtual(veiculoId);
+    
+    if (!proprietarioAtual) {
+      return null;
+    }
+    
+    const kmAtual = parseInt(veiculo.km_atual) || 0;
+    const kmInicioPeriodo = parseInt(proprietarioAtual.km_aquisicao) || 0;
+    
+    // Buscar KM mínimo do histórico (KM total do veículo)
+    const kmHistorico = await queryAll(
+      'SELECT MIN(km) as km_minimo FROM km_historico WHERE veiculo_id = ?',
+      [veiculoId]
+    );
+    
+    const kmTotalVeiculo = kmHistorico && kmHistorico[0] && kmHistorico[0].km_minimo 
+      ? parseInt(kmHistorico[0].km_minimo) 
+      : kmInicioPeriodo;
+    
+    // Calcular KM rodado no período atual
+    const kmRodadoNoPeriodo = Math.max(0, kmAtual - kmInicioPeriodo);
+    
+    return {
+      km_total_veiculo: kmTotalVeiculo,
+      km_inicio_periodo: kmInicioPeriodo,
+      km_atual: kmAtual,
+      km_rodado_no_periodo: kmRodadoNoPeriodo,
+      data_aquisicao: proprietarioAtual.data_aquisicao || null,
+    };
+  } catch (error) {
+    console.error('[getResumoPeriodoProprietarioAtual] Erro:', error);
+    return null;
+  }
+}
+

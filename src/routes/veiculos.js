@@ -690,6 +690,38 @@ router.delete('/:veiculoId/proprietarios-historico/:historicoId', authRequired, 
   }
 });
 
+// Resumo do período do proprietário atual (DEVE VIR ANTES DE /:id)
+router.get('/:id/resumo-periodo', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Importar helper
+    const { getResumoPeriodoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+    
+    const resumo = await getResumoPeriodoProprietarioAtual(id);
+    
+    if (!resumo) {
+      return res.status(404).json({ error: 'Não foi possível obter resumo do período' });
+    }
+
+    res.json(resumo);
+  } catch (err) {
+    console.error('Erro ao buscar resumo do período:', err);
+    res.status(500).json({ error: 'Erro ao buscar resumo do período' });
+  }
+});
+
 // Buscar veículo por ID (DEVE VIR POR ÚLTIMO)
 // SEGURANÇA: Filtra obrigatoriamente por usuario_id para prevenir acesso não autorizado
 router.get('/:id', authRequired, async (req, res) => {
