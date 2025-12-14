@@ -690,6 +690,169 @@ router.delete('/:veiculoId/proprietarios-historico/:historicoId', authRequired, 
   }
 });
 
+// Timeline unificada de eventos do veículo (DEVE VIR ANTES DE /:id)
+router.get('/:id/timeline', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Importar helpers
+    const { getProprietarioAtual, manutencaoPertenceAoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+    const proprietarioAtual = await getProprietarioAtual(id);
+
+    const eventos = [];
+
+    // 1. Buscar eventos de KM
+    const kmHistorico = await queryAll(
+      `SELECT 
+        id,
+        km,
+        origem,
+        data_registro,
+        criado_em
+      FROM km_historico
+      WHERE veiculo_id = ?
+      ORDER BY data_registro ASC, criado_em ASC`,
+      [id]
+    );
+
+    if (kmHistorico && kmHistorico.length > 0) {
+      for (const kmEvent of kmHistorico) {
+        eventos.push({
+          tipo: 'km',
+          id: `km_${kmEvent.id}`,
+          data: kmEvent.data_registro || kmEvent.criado_em,
+          descricao: `KM atualizado: ${parseInt(kmEvent.km || 0).toLocaleString('pt-BR')} km`,
+          km_relacionado: parseInt(kmEvent.km || 0),
+          origem: kmEvent.origem || 'manual',
+          isHerdado: false, // KM sempre é do período atual quando registrado
+        });
+      }
+    }
+
+    // 2. Buscar manutenções
+    const manutencoes = await queryAll(
+      `SELECT 
+        m.id,
+        m.data,
+        m.descricao,
+        m.km_antes,
+        m.km_depois,
+        m.tipo,
+        m.tipo_manutencao,
+        m.valor,
+        m.imagem_url
+      FROM manutencoes m
+      WHERE m.veiculo_id = ?
+      ORDER BY m.data ASC, m.id ASC`,
+      [id]
+    );
+
+    if (manutencoes && manutencoes.length > 0) {
+      for (const man of manutencoes) {
+        const pertenceAoProprietarioAtual = await manutencaoPertenceAoProprietarioAtual(
+          id,
+          man.data || new Date().toISOString().split('T')[0]
+        );
+
+        const isHerdado = !pertenceAoProprietarioAtual;
+        const isProprietarioAnterior = proprietarioAtual && man.data && man.data < proprietarioAtual.data_aquisicao;
+
+        let descricao = man.descricao || 'Manutenção';
+        if (man.tipo_manutencao) {
+          descricao = `${man.tipo_manutencao}: ${descricao}`;
+        } else if (man.tipo) {
+          descricao = `${man.tipo}: ${descricao}`;
+        }
+
+        eventos.push({
+          tipo: 'manutencao',
+          id: `man_${man.id}`,
+          data: man.data,
+          descricao: descricao,
+          km_relacionado: man.km_depois || man.km_antes || null,
+          valor: pertenceAoProprietarioAtual ? man.valor : null,
+          isHerdado: isHerdado,
+          isProprietarioAnterior: isProprietarioAnterior,
+          origem: null,
+        });
+      }
+    }
+
+    // 3. Buscar transferências (proprietarios_historico)
+    const transferencias = await queryAll(
+      `SELECT 
+        id,
+        nome,
+        data_aquisicao,
+        data_venda,
+        km_aquisicao,
+        km_venda
+      FROM proprietarios_historico
+      WHERE veiculo_id = ?
+      ORDER BY data_aquisicao ASC, id ASC`,
+      [id]
+    );
+
+    if (transferencias && transferencias.length > 0) {
+      for (const transf of transferencias) {
+        // Evento de aquisição
+        if (transf.data_aquisicao) {
+          eventos.push({
+            tipo: 'transferencia',
+            id: `transf_aquisicao_${transf.id}`,
+            data: transf.data_aquisicao,
+            descricao: `Veículo adquirido por ${transf.nome || 'Proprietário'}`,
+            km_relacionado: transf.km_aquisicao || null,
+            isHerdado: false,
+            origem: 'aquisicao',
+          });
+        }
+
+        // Evento de venda (se houver)
+        if (transf.data_venda) {
+          eventos.push({
+            tipo: 'transferencia',
+            id: `transf_venda_${transf.id}`,
+            data: transf.data_venda,
+            descricao: `Veículo vendido por ${transf.nome || 'Proprietário'}`,
+            km_relacionado: transf.km_venda || null,
+            isHerdado: false,
+            origem: 'venda',
+          });
+        }
+      }
+    }
+
+    // Ordenar eventos por data (mais antigo primeiro)
+    eventos.sort((a, b) => {
+      const dataA = new Date(a.data || 0);
+      const dataB = new Date(b.data || 0);
+      if (dataA.getTime() !== dataB.getTime()) {
+        return dataA.getTime() - dataB.getTime();
+      }
+      // Se mesma data, ordenar por tipo: transferencia > manutencao > km
+      const ordemTipo = { transferencia: 0, manutencao: 1, km: 2 };
+      return (ordemTipo[a.tipo] || 99) - (ordemTipo[b.tipo] || 99);
+    });
+
+    res.json(eventos);
+  } catch (err) {
+    console.error('Erro ao buscar timeline:', err);
+    res.status(500).json({ error: 'Erro ao buscar timeline' });
+  }
+});
+
 // Resumo do período do proprietário atual (DEVE VIR ANTES DE /:id)
 router.get('/:id/resumo-periodo', authRequired, async (req, res) => {
   try {
