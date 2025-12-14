@@ -98,6 +98,20 @@ router.post('/ocr', authRequired, upload.single('imagem'), async (req, res) => {
  */
 router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
   try {
+    const { veiculo_id } = req.body;
+    
+    // Validar que existe proprietário atual válido (com data_inicio e km_inicio)
+    if (veiculo_id) {
+      const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+      const proprietarioAtual = await getProprietarioAtual(parseInt(veiculo_id));
+      
+      if (!proprietarioAtual || !proprietarioAtual.data_inicio || proprietarioAtual.km_inicio === null || proprietarioAtual.km_inicio === undefined) {
+        return res.status(400).json({ 
+          error: 'Não é possível cadastrar abastecimento. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
+          code: 'PERIODO_POSSE_INVALIDO'
+        });
+      }
+    }
     const userId = req.userId;
     const {
       veiculo_id,

@@ -506,7 +506,65 @@ const addMissingColumns = async () => {
     // Migração de dados legados: corrigir proprietarios_historico com dados incompletos
     console.log('  🔄 Migrando dados legados de proprietarios_historico...');
     try {
-      // Corrigir registros onde data_inicio ou km_inicio estão NULL (não deveria acontecer após migração acima, mas garantir)
+      // URGENTE: Converter strings vazias ("") em NULL para campos de data
+      await query(`
+        UPDATE proprietarios_historico 
+        SET 
+          data_aquisicao = CASE 
+            WHEN data_aquisicao = '' OR data_aquisicao IS NULL THEN NULL
+            ELSE data_aquisicao
+          END,
+          data_inicio = CASE 
+            WHEN data_inicio = '' OR data_inicio IS NULL THEN NULL
+            ELSE data_inicio
+          END,
+          data_venda = CASE 
+            WHEN data_venda = '' THEN NULL
+            ELSE data_venda
+          END
+        WHERE data_aquisicao = '' OR data_inicio = '' OR data_venda = ''
+      `);
+      console.log('  ✓ Strings vazias convertidas para NULL em campos de data');
+
+      // Corrigir data_aquisicao: usar criado_em se NULL
+      await query(`
+        UPDATE proprietarios_historico 
+        SET data_aquisicao = COALESCE(data_aquisicao, DATE(criado_em))
+        WHERE data_aquisicao IS NULL
+      `);
+
+      // Corrigir km_aquisicao: usar menor KM conhecido do veículo ou 0
+      await query(`
+        UPDATE proprietarios_historico ph
+        SET km_aquisicao = COALESCE(
+          ph.km_aquisicao,
+          (SELECT MIN(km) FROM km_historico WHERE veiculo_id = ph.veiculo_id),
+          (SELECT km_atual FROM veiculos WHERE id = ph.veiculo_id),
+          0
+        )
+        WHERE km_aquisicao IS NULL
+      `);
+
+      // Garantir que data_aquisicao e km_aquisicao sejam NOT NULL
+      // Primeiro preencher, depois tornar NOT NULL
+      await query(`
+        UPDATE proprietarios_historico 
+        SET 
+          data_aquisicao = COALESCE(data_aquisicao, DATE(criado_em)),
+          km_aquisicao = COALESCE(km_aquisicao, 0)
+        WHERE data_aquisicao IS NULL OR km_aquisicao IS NULL
+      `);
+
+      // Tentar tornar NOT NULL (pode falhar se ainda houver NULL, mas já corrigimos acima)
+      try {
+        await query('ALTER TABLE proprietarios_historico ALTER COLUMN data_aquisicao SET NOT NULL');
+        await query('ALTER TABLE proprietarios_historico ALTER COLUMN km_aquisicao SET NOT NULL');
+        console.log('  ✓ data_aquisicao e km_aquisicao agora são NOT NULL');
+      } catch (notNullError) {
+        console.warn('  ⚠ Não foi possível tornar data_aquisicao/km_aquisicao NOT NULL (pode haver NULLs restantes):', notNullError.message);
+      }
+
+      // Corrigir registros onde data_inicio ou km_inicio estão NULL
       await query(`
         UPDATE proprietarios_historico 
         SET 
@@ -524,6 +582,14 @@ const addMissingColumns = async () => {
         WHERE origem IS NULL OR origem = ''
       `);
       console.log('  ✓ Dados legados de km_historico corrigidos');
+
+      // Garantir que origem seja NOT NULL (impedir INSERT com origem NULL)
+      try {
+        await query('ALTER TABLE km_historico ALTER COLUMN origem SET NOT NULL');
+        console.log('  ✓ Coluna origem em km_historico agora é NOT NULL');
+      } catch (notNullError) {
+        console.warn('  ⚠ Não foi possível tornar origem NOT NULL (pode haver NULLs restantes):', notNullError.message);
+      }
 
       // Criar registros iniciais em km_historico para veículos sem histórico
       // Apenas se o veículo tiver proprietário atual mas não tiver registro inicial
