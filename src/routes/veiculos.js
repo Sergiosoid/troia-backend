@@ -79,27 +79,88 @@ router.post('/', authRequired, async (req, res) => {
     // Se zero km, KM inicial é 0
     const kmInicioFinal = origem_posse === 'zero_km' ? 0 : parseInt(km_inicio) || 0;
 
+    // Validar formato da data de aquisição
+    const dataAquisicaoValida = data_aquisicao && /^\d{4}-\d{2}-\d{2}$/.test(data_aquisicao);
+    if (!dataAquisicaoValida) {
+      return res.status(400).json({ error: 'Data de aquisição inválida. Use o formato YYYY-MM-DD' });
+    }
+
+    // Verificar se data não é futura
+    const dataAquisicaoDate = new Date(data_aquisicao);
+    if (isNaN(dataAquisicaoDate.getTime()) || dataAquisicaoDate > new Date()) {
+      return res.status(400).json({ error: 'Data de aquisição inválida ou futura' });
+    }
+
+    // Verificar unicidade por PLACA (se fornecido)
+    if (placa && placa.trim()) {
+      const placaLimpa = placa.trim().toUpperCase();
+      
+      const veiculoPorPlaca = await queryOne(
+        'SELECT id, usuario_id FROM veiculos WHERE placa = ?',
+        [placaLimpa]
+      );
+
+      if (veiculoPorPlaca) {
+        const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+        const proprietarioAtual = await getProprietarioAtual(veiculoPorPlaca.id);
+        
+        return res.status(409).json({
+          codigo: 'VEICULO_JA_EXISTE',
+          mensagem: 'Este veículo já existe no sistema (placa duplicada).',
+          veiculo_id: veiculoPorPlaca.id,
+          proprietario_atual_id: proprietarioAtual?.id || null
+        });
+      }
+    }
+
     // Verificar unicidade por RENAVAM (se fornecido)
     if (renavam && renavam.trim()) {
       const renavamLimpo = renavam.trim();
       
-      // Buscar veículo existente com o mesmo RENAVAM
-      const veiculoExistente = await queryOne(
+      const veiculoPorRenavam = await queryOne(
         'SELECT id, usuario_id FROM veiculos WHERE renavam = ?',
         [renavamLimpo]
       );
 
-      if (veiculoExistente) {
-        // Buscar proprietário atual do veículo existente
+      if (veiculoPorRenavam) {
         const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
-        const proprietarioAtual = await getProprietarioAtual(veiculoExistente.id);
+        const proprietarioAtual = await getProprietarioAtual(veiculoPorRenavam.id);
         
         return res.status(409).json({
           codigo: 'VEICULO_JA_EXISTE',
-          mensagem: 'Este veículo já existe no sistema.',
-          veiculo_id: veiculoExistente.id,
+          mensagem: 'Este veículo já existe no sistema (RENAVAM duplicado).',
+          veiculo_id: veiculoPorRenavam.id,
           proprietario_atual_id: proprietarioAtual?.id || null
         });
+      }
+    }
+
+    // Verificar unicidade por CHASSI (se coluna existir e chassi fornecido)
+    const { chassi } = req.body;
+    if (chassi && chassi.trim()) {
+      try {
+        const chassiLimpo = chassi.trim().toUpperCase();
+        const veiculoPorChassi = await queryOne(
+          'SELECT id, usuario_id FROM veiculos WHERE chassi = ?',
+          [chassiLimpo]
+        );
+
+        if (veiculoPorChassi) {
+          const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+          const proprietarioAtual = await getProprietarioAtual(veiculoPorChassi.id);
+          
+          return res.status(409).json({
+            codigo: 'VEICULO_JA_EXISTE',
+            mensagem: 'Este veículo já existe no sistema (chassi duplicado).',
+            veiculo_id: veiculoPorChassi.id,
+            proprietario_atual_id: proprietarioAtual?.id || null
+          });
+        }
+      } catch (chassiError) {
+        // Se coluna chassi não existir, ignorar (não é obrigatória)
+        if (!chassiError.message?.includes('column') && !chassiError.message?.includes('does not exist')) {
+          throw chassiError;
+        }
       }
     }
 
@@ -111,50 +172,112 @@ router.post('/', authRequired, async (req, res) => {
     const nomeProprietario = usuario?.nome || usuario?.email || 'Proprietário';
 
     // Inserir veículo (proprietario_id pode ser null)
-    const result = await query(
-      `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id, km_atual)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        placa ? placa.trim().toUpperCase() : null,
-        renavam ? renavam.trim() : null,
-        proprietario_id || null,
-        marca ? marca.trim() : null,
-        modelo.trim(),
-        ano.trim(),
-        tipo_veiculo || null,
-        req.userId,
-        kmInicioFinal
-      ]
-    );
-
-    const id = result.insertId || null;
+    // Tentar incluir chassi se fornecido e coluna existir
+    let result, id;
+    
+    if (chassi && chassi.trim()) {
+      try {
+        // Tentar inserir com chassi
+        result = await query(
+          `INSERT INTO veiculos (placa, renavam, chassi, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id, km_atual)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            placa ? placa.trim().toUpperCase() : null,
+            renavam ? renavam.trim() : null,
+            chassi.trim().toUpperCase(),
+            proprietario_id || null,
+            marca ? marca.trim() : null,
+            modelo.trim(),
+            ano.trim(),
+            tipo_veiculo || null,
+            req.userId,
+            kmInicioFinal
+          ]
+        );
+        id = result.insertId || null;
+      } catch (chassiError) {
+        // Se coluna chassi não existir, inserir sem ela
+        if (chassiError.message?.includes('column') || chassiError.message?.includes('does not exist')) {
+          result = await query(
+            `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id, km_atual)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              placa ? placa.trim().toUpperCase() : null,
+              renavam ? renavam.trim() : null,
+              proprietario_id || null,
+              marca ? marca.trim() : null,
+              modelo.trim(),
+              ano.trim(),
+              tipo_veiculo || null,
+              req.userId,
+              kmInicioFinal
+            ]
+          );
+          id = result.insertId || null;
+        } else {
+          throw chassiError;
+        }
+      }
+    } else {
+      result = await query(
+        `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id, km_atual)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          placa ? placa.trim().toUpperCase() : null,
+          renavam ? renavam.trim() : null,
+          proprietario_id || null,
+          marca ? marca.trim() : null,
+          modelo.trim(),
+          ano.trim(),
+          tipo_veiculo || null,
+          req.userId,
+          kmInicioFinal
+        ]
+      );
+      id = result.insertId || null;
+    }
 
     // Criar registro em proprietarios_historico
     const { isPostgres } = await import('../database/db-adapter.js');
     const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
     
-    await query(
-      `INSERT INTO proprietarios_historico 
-       (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_inicio, km_inicio, origem_posse, criado_em)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${timestampFunc})`,
-      [
-        id,
-        req.userId,
-        nomeProprietario,
-        data_aquisicao,
-        kmInicioFinal,
-        data_aquisicao,
-        kmInicioFinal,
-        origem_posse
-      ]
-    );
+    try {
+      await query(
+        `INSERT INTO proprietarios_historico 
+         (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_inicio, km_inicio, origem_posse, criado_em)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${timestampFunc})`,
+        [
+          id,
+          req.userId,
+          nomeProprietario,
+          data_aquisicao,
+          kmInicioFinal,
+          data_aquisicao,
+          kmInicioFinal,
+          origem_posse
+        ]
+      );
+    } catch (histError) {
+      // Se falhar ao criar histórico, reverter criação do veículo
+      await query('DELETE FROM veiculos WHERE id = ?', [id]);
+      console.error('[ERRO CRÍTICO] Falha ao criar histórico de proprietário:', histError.message);
+      return res.status(500).json({ 
+        error: 'Erro ao criar histórico de proprietário. O veículo não foi cadastrado.' 
+      });
+    }
 
     // Criar registro inicial em km_historico
-    await query(
-      `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-       VALUES (?, ?, ?, 'inicio_posse', ${timestampFunc}, ${timestampFunc})`,
-      [id, req.userId, kmInicioFinal]
-    );
+    try {
+      await query(
+        `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
+         VALUES (?, ?, ?, 'inicio_posse', ${timestampFunc}, ${timestampFunc})`,
+        [id, req.userId, kmInicioFinal]
+      );
+    } catch (kmError) {
+      // Se falhar ao criar KM histórico, logar mas não reverter (veículo já foi criado)
+      console.error('[ERRO] Falha ao criar registro inicial de KM:', kmError.message);
+      // Continuar, pois o veículo já foi criado e o histórico de proprietário também
+    }
 
     return res.json({
       success: true,
@@ -292,6 +415,47 @@ router.get('/totais', authRequired, async (req, res) => {
     console.error('[ERRO] Erro ao listar veículos com totais:', error);
     return res.status(500).json({ error: error.message || 'Erro ao listar veículos' });
     }
+});
+
+// OCR de documento do veículo (stub/placeholder) - DEVE VIR ANTES DE /:id
+router.post('/ocr-documento', authRequired, upload.single('imagem'), async (req, res) => {
+  try {
+    const file = req.file;
+    
+    if (!file) {
+      return res.status(400).json({ 
+        error: 'Imagem do documento é obrigatória',
+        code: 'IMAGEM_REQUIRED'
+      });
+    }
+
+    // Stub: OCR de documento ainda não implementado
+    // Aceita a requisição mas retorna dados simulados para integração futura
+    // Não bloqueia o fluxo se OCR falhar
+    res.json({
+      success: false,
+      dados: {
+        placa: null,
+        renavam: null,
+        chassi: null,
+        marca: null,
+        modelo: null,
+        ano: null,
+        km_atual: null
+      },
+      mensagem: 'OCR de documento ainda não implementado. Por favor, preencha os dados manualmente.',
+      codigo: 'OCR_NAO_IMPLEMENTADO'
+    });
+  } catch (error) {
+    console.error('Erro no OCR de documento (stub):', error);
+    // Não bloquear fluxo - retornar resposta amigável
+    res.json({
+      success: false,
+      dados: null,
+      mensagem: 'Não foi possível processar o documento. Por favor, preencha os dados manualmente.',
+      codigo: 'OCR_ERRO'
+    });
+  }
 });
 
 // OCR de KM (stub/placeholder) - DEVE VIR ANTES DE /:id

@@ -524,6 +524,35 @@ const addMissingColumns = async () => {
         WHERE origem IS NULL OR origem = ''
       `);
       console.log('  ✓ Dados legados de km_historico corrigidos');
+
+      // Criar registros iniciais em km_historico para veículos sem histórico
+      // Apenas se o veículo tiver proprietário atual mas não tiver registro inicial
+      try {
+        const { isPostgres } = await import('../database/db-adapter.js');
+        const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+        
+        await query(`
+          INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em)
+          SELECT 
+            v.id,
+            v.usuario_id,
+            COALESCE(v.km_atual, 0),
+            'inicio_posse',
+            COALESCE(ph.data_inicio, ph.data_aquisicao, DATE(v.criado_em), ${timestampFunc}),
+            ${timestampFunc}
+          FROM veiculos v
+          INNER JOIN proprietarios_historico ph ON v.id = ph.veiculo_id 
+            AND (ph.data_venda IS NULL OR ph.data_venda = '')
+          LEFT JOIN km_historico kh ON v.id = kh.veiculo_id 
+            AND kh.origem = 'inicio_posse'
+          WHERE kh.id IS NULL
+            AND v.km_atual IS NOT NULL
+        `);
+        console.log('  ✓ Registros iniciais de km_historico criados para veículos sem histórico');
+      } catch (kmInitError) {
+        // Não bloquear se falhar (pode não haver veículos sem histórico)
+        console.warn('  ⚠ Erro ao criar registros iniciais de km_historico:', kmInitError.message);
+      }
     } catch (migError) {
       console.warn('  ⚠ Erro ao migrar dados legados (pode ser normal se não houver dados):', migError.message);
       // Não bloquear se falhar (pode não haver dados para migrar)
