@@ -52,6 +52,30 @@ router.post('/', authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Ano é obrigatório' });
     }
 
+    // Verificar unicidade por RENAVAM (se fornecido)
+    if (renavam && renavam.trim()) {
+      const renavamLimpo = renavam.trim();
+      
+      // Buscar veículo existente com o mesmo RENAVAM
+      const veiculoExistente = await queryOne(
+        'SELECT id, usuario_id FROM veiculos WHERE renavam = ?',
+        [renavamLimpo]
+      );
+
+      if (veiculoExistente) {
+        // Buscar proprietário atual do veículo existente
+        const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+        const proprietarioAtual = await getProprietarioAtual(veiculoExistente.id);
+        
+        return res.status(409).json({
+          codigo: 'VEICULO_JA_EXISTE',
+          mensagem: 'Este veículo já existe no sistema.',
+          veiculo_id: veiculoExistente.id,
+          proprietario_atual_id: proprietarioAtual?.id || null
+        });
+      }
+    }
+
     // Inserir veículo (proprietario_id pode ser null)
     const result = await query(
       `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id)
