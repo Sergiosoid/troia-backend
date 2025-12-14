@@ -17,6 +17,9 @@ router.get('/resumo', authRequired, async (req, res) => {
   try {
     const userId = req.userId;
 
+    // Importar helper de proprietário atual
+    const { getPeriodoProprietarioAtual, manutencaoPertenceAoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+
     // (A) Buscar todos os veículos do usuário
     const veiculos = await queryAll(
       'SELECT id, km_atual FROM veiculos WHERE usuario_id = ?',
@@ -28,23 +31,54 @@ router.get('/resumo', authRequired, async (req, res) => {
       return total + (parseInt(veiculo.km_atual) || 0);
     }, 0);
 
-    // (B) Buscar abastecimentos dos últimos 30 dias
+    // (B) Buscar abastecimentos dos últimos 30 dias (apenas do proprietário atual)
     const data30DiasAtras = new Date();
     data30DiasAtras.setDate(data30DiasAtras.getDate() - 30);
     const data30DiasAtrasStr = data30DiasAtras.toISOString().split('T')[0];
 
-    const abastecimentos30Dias = await queryAll(
-      `SELECT valor_total FROM abastecimentos 
-       WHERE usuario_id = ? AND data >= ?`,
-      [userId, data30DiasAtrasStr]
-    );
+    // Para cada veículo, filtrar abastecimentos do período do proprietário atual
+    let abastecimentos30Dias = [];
+    for (const veiculo of veiculos) {
+      const periodo = await getPeriodoProprietarioAtual(veiculo.id);
+      if (!periodo) continue;
 
-    // (B) Buscar manutenções dos últimos 30 dias
-    const manutencoes30Dias = await queryAll(
-      `SELECT valor FROM manutencoes 
-       WHERE usuario_id = ? AND data >= ?`,
-      [userId, data30DiasAtrasStr]
-    );
+      const dataInicioFiltro = periodo.dataInicio && periodo.dataInicio > data30DiasAtrasStr 
+        ? periodo.dataInicio 
+        : data30DiasAtrasStr;
+
+      const abastVeiculo = await queryAll(
+        `SELECT valor_total FROM abastecimentos 
+         WHERE usuario_id = ? AND veiculo_id = ? AND data >= ?`,
+        [userId, veiculo.id, dataInicioFiltro]
+      );
+      abastecimentos30Dias = abastecimentos30Dias.concat(abastVeiculo);
+    }
+
+    // (B) Buscar manutenções dos últimos 30 dias (apenas do proprietário atual)
+    let manutencoes30Dias = [];
+    for (const veiculo of veiculos) {
+      const periodo = await getPeriodoProprietarioAtual(veiculo.id);
+      if (!periodo) continue;
+
+      const dataInicioFiltro = periodo.dataInicio && periodo.dataInicio > data30DiasAtrasStr 
+        ? periodo.dataInicio 
+        : data30DiasAtrasStr;
+
+      // Buscar todas as manutenções do veículo (herdáveis)
+      const manutVeiculo = await queryAll(
+        `SELECT valor, data FROM manutencoes 
+         WHERE veiculo_id = ? AND data >= ?`,
+        [veiculo.id, dataInicioFiltro]
+      );
+
+      // Filtrar apenas as que pertencem ao proprietário atual
+      for (const man of manutVeiculo) {
+        const pertence = await manutencaoPertenceAoProprietarioAtual(veiculo.id, man.data);
+        if (pertence && man.valor) {
+          manutencoes30Dias.push(man);
+        }
+      }
+    }
 
     // Calcular gasto30dias
     const gastoAbastecimentos = abastecimentos30Dias.reduce((total, ab) => {
@@ -57,14 +91,22 @@ router.get('/resumo', authRequired, async (req, res) => {
 
     const gasto30dias = gastoAbastecimentos + gastoManutencoes;
 
-    // (C) Calcular consumo médio (km rodado / litros abastecidos)
-    // Buscar todos os abastecimentos com km_antes e km_depois
-    const abastecimentosComKm = await queryAll(
-      `SELECT km_antes, km_depois, litros 
-       FROM abastecimentos 
-       WHERE usuario_id = ? AND km_antes IS NOT NULL AND km_depois IS NOT NULL AND litros > 0`,
-      [userId]
-    );
+    // (C) Calcular consumo médio (km rodado / litros abastecidos) - apenas do proprietário atual
+    let abastecimentosComKm = [];
+    for (const veiculo of veiculos) {
+      const periodo = await getPeriodoProprietarioAtual(veiculo.id);
+      if (!periodo || !periodo.dataInicio) continue;
+
+      const abastVeiculo = await queryAll(
+        `SELECT km_antes, km_depois, litros, data
+         FROM abastecimentos 
+         WHERE usuario_id = ? AND veiculo_id = ? 
+           AND km_antes IS NOT NULL AND km_depois IS NOT NULL 
+           AND litros > 0 AND data >= ?`,
+        [userId, veiculo.id, periodo.dataInicio]
+      );
+      abastecimentosComKm = abastecimentosComKm.concat(abastVeiculo);
+    }
 
     let kmRodadoTotal = 0;
     let litrosTotal = 0;
@@ -80,66 +122,98 @@ router.get('/resumo', authRequired, async (req, res) => {
 
     const consumoMedio = litrosTotal > 0 ? (kmRodadoTotal / litrosTotal).toFixed(2) : 0;
 
-    // (D) Calcular litros abastecidos no mês atual
+    // (D) Calcular litros abastecidos no mês atual (apenas do proprietário atual)
     const agora = new Date();
     const primeiroDiaMes = new Date(agora.getFullYear(), agora.getMonth(), 1);
     const primeiroDiaMesStr = primeiroDiaMes.toISOString().split('T')[0];
 
-    const abastecimentosMes = await queryAll(
-      `SELECT litros FROM abastecimentos 
-       WHERE usuario_id = ? AND data >= ?`,
-      [userId, primeiroDiaMesStr]
-    );
+    let abastecimentosMes = [];
+    for (const veiculo of veiculos) {
+      const periodo = await getPeriodoProprietarioAtual(veiculo.id);
+      if (!periodo) continue;
+
+      const dataInicioFiltro = periodo.dataInicio && periodo.dataInicio > primeiroDiaMesStr 
+        ? periodo.dataInicio 
+        : primeiroDiaMesStr;
+
+      const abastVeiculo = await queryAll(
+        `SELECT litros FROM abastecimentos 
+         WHERE usuario_id = ? AND veiculo_id = ? AND data >= ?`,
+        [userId, veiculo.id, dataInicioFiltro]
+      );
+      abastecimentosMes = abastecimentosMes.concat(abastVeiculo);
+    }
 
     const litrosMes = abastecimentosMes.reduce((total, ab) => {
       return total + (parseFloat(ab.litros) || 0);
     }, 0);
 
-    // (E) Calcular previsão de manutenção mais próxima
-    // Buscar última troca de óleo (manutenção preventiva na área motor/cambio)
-    const ultimaTrocaOleo = await queryOne(
-      `SELECT m.*, v.km_atual 
-       FROM manutencoes m
-       JOIN veiculos v ON m.veiculo_id = v.id
-       WHERE m.usuario_id = ? 
-         AND m.tipo_manutencao = 'preventiva'
-         AND m.area_manutencao = 'motor_cambio'
-         AND m.data IS NOT NULL
-       ORDER BY m.data DESC, m.id DESC
-       LIMIT 1`,
-      [userId]
-    );
+    // (E) Calcular previsão de manutenção mais próxima (considerando período do proprietário atual)
+    // Buscar última troca de óleo (manutenção preventiva na área motor/cambio) - pode ser herdada
+    let ultimaTrocaOleo = null;
+    let veiculoTrocaOleo = null;
+    
+    for (const veiculo of veiculos) {
+      const periodo = await getPeriodoProprietarioAtual(veiculo.id);
+      if (!periodo) continue;
+
+      const trocaOleo = await queryOne(
+        `SELECT m.*, v.km_atual 
+         FROM manutencoes m
+         JOIN veiculos v ON m.veiculo_id = v.id
+         WHERE m.veiculo_id = ?
+           AND m.tipo_manutencao = 'preventiva'
+           AND m.area_manutencao = 'motor_cambio'
+           AND m.data IS NOT NULL
+           AND (m.data >= ? OR ? IS NULL)
+         ORDER BY m.data DESC, m.id DESC
+         LIMIT 1`,
+        [veiculo.id, periodo.dataInicio, periodo.dataInicio]
+      );
+
+      if (trocaOleo && (!ultimaTrocaOleo || trocaOleo.data > ultimaTrocaOleo.data)) {
+        ultimaTrocaOleo = trocaOleo;
+        veiculoTrocaOleo = veiculo;
+      }
+    }
 
     let manutencaoProxima = null;
 
-    if (ultimaTrocaOleo && ultimaTrocaOleo.veiculo_id) {
+    if (ultimaTrocaOleo && veiculoTrocaOleo) {
       // Intervalo padrão: 10.000 km ou 6 meses
       const intervaloKm = 10000;
       const intervaloMeses = 6;
 
-      const kmAtualVeiculo = parseInt(ultimaTrocaOleo.km_atual) || 0;
+      const periodo = await getPeriodoProprietarioAtual(veiculoTrocaOleo.id);
+      const kmInicio = periodo ? (parseInt(periodo.kmInicio) || 0) : 0;
+      const kmAtualVeiculo = parseInt(veiculoTrocaOleo.km_atual) || 0;
       
       // Buscar KM do veículo na data da última manutenção (aproximação)
-      // Se não tiver histórico de KM, usar km_atual atual como referência
       const kmHistorico = await queryOne(
         `SELECT km FROM km_historico 
          WHERE veiculo_id = ? AND criado_em <= ?
          ORDER BY criado_em DESC LIMIT 1`,
-        [ultimaTrocaOleo.veiculo_id, ultimaTrocaOleo.data || new Date()]
+        [veiculoTrocaOleo.id, ultimaTrocaOleo.data || new Date()]
       );
       
       const kmNaDataManutencao = kmHistorico 
         ? parseInt(kmHistorico.km) 
-        : Math.max(0, kmAtualVeiculo - 5000); // Aproximação: assumir 5000 km rodados desde então
+        : Math.max(kmInicio, kmAtualVeiculo - 5000); // Aproximação, mas não menor que kmInicio
       
-      const kmRodadoDesdeManutencao = kmAtualVeiculo - kmNaDataManutencao;
+      // Calcular KM rodado desde a última manutenção (apenas no período do proprietário atual)
+      const kmRodadoDesdeManutencao = Math.max(0, kmAtualVeiculo - Math.max(kmNaDataManutencao, kmInicio));
       const faltaKm = intervaloKm - kmRodadoDesdeManutencao;
 
-      // Verificar também por data (6 meses)
+      // Verificar também por data (6 meses) - considerar período do proprietário atual
       const dataUltimaManutencao = ultimaTrocaOleo.data 
         ? new Date(ultimaTrocaOleo.data) 
         : new Date();
-      const mesesDesdeManutencao = (agora - dataUltimaManutencao) / (1000 * 60 * 60 * 24 * 30);
+      
+      const dataInicioPeriodo = periodo && periodo.dataInicio 
+        ? new Date(periodo.dataInicio) 
+        : dataUltimaManutencao;
+      const dataReferencia = dataUltimaManutencao > dataInicioPeriodo ? dataUltimaManutencao : dataInicioPeriodo;
+      const mesesDesdeManutencao = (agora - dataReferencia) / (1000 * 60 * 60 * 24 * 30);
       const faltaMeses = intervaloMeses - mesesDesdeManutencao;
 
       // Se falta menos de 2000 km ou menos de 1 mês, alertar
@@ -149,7 +223,7 @@ router.get('/resumo', authRequired, async (req, res) => {
           emKm: kmNaDataManutencao + intervaloKm,
           faltaKm: Math.max(0, faltaKm),
           faltaMeses: Math.max(0, Math.round(faltaMeses * 10) / 10),
-          veiculoId: ultimaTrocaOleo.veiculo_id,
+          veiculoId: veiculoTrocaOleo.id,
         };
       }
     }

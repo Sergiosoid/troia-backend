@@ -18,6 +18,9 @@ router.get('/', authRequired, async (req, res) => {
     const userId = req.userId;
     const agora = new Date();
 
+    // Importar helper de proprietário atual
+    const { getPeriodoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+
     // Buscar todos os veículos do usuário
     const veiculos = await queryAll(
       'SELECT id, placa, modelo, ano, km_atual FROM veiculos WHERE usuario_id = ?',
@@ -28,17 +31,30 @@ router.get('/', authRequired, async (req, res) => {
 
     for (const veiculo of veiculos) {
       const veiculoId = veiculo.id;
+      
+      // Obter período do proprietário atual
+      const periodo = await getPeriodoProprietarioAtual(veiculoId);
+      
+      // Se não há proprietário atual, pular este veículo
+      if (!periodo) {
+        continue;
+      }
+
+      // Calcular KM rodado no período do proprietário atual
+      const kmInicio = parseInt(periodo.kmInicio) || 0;
       const kmAtual = parseInt(veiculo.km_atual) || 0;
+      const kmRodadoNoPeriodo = Math.max(0, kmAtual - kmInicio);
+
       const alertas = [];
 
       // (A) ALERTA: Troca de Óleo
-      // Buscar última manutenção relacionada a óleo
+      // Buscar última manutenção relacionada a óleo (pode ser herdada)
+      // IMPORTANTE: Remover filtro por usuario_id para buscar manutenções herdadas
       const ultimaTrocaOleo = await queryOne(
         `SELECT m.*, v.km_atual 
          FROM manutencoes m
          JOIN veiculos v ON m.veiculo_id = v.id
-         WHERE m.usuario_id = ? 
-           AND m.veiculo_id = ?
+         WHERE m.veiculo_id = ?
            AND (
              LOWER(m.descricao) LIKE '%óleo%' 
              OR LOWER(m.descricao) LIKE '%oleo%'
@@ -47,9 +63,10 @@ router.get('/', authRequired, async (req, res) => {
              OR (m.tipo_manutencao = 'preventiva' AND m.area_manutencao = 'motor_cambio')
            )
            AND m.data IS NOT NULL
+           AND (m.data >= ? OR ? IS NULL)
          ORDER BY m.data DESC, m.id DESC
          LIMIT 1`,
-        [userId, veiculoId]
+        [veiculoId, periodo.dataInicio, periodo.dataInicio]
       );
 
       if (ultimaTrocaOleo) {
@@ -66,15 +83,20 @@ router.get('/', authRequired, async (req, res) => {
 
         const kmNaDataManutencao = kmHistorico 
           ? parseInt(kmHistorico.km) 
-          : Math.max(0, kmAtual - 5000); // Aproximação
+          : Math.max(kmInicio, kmAtual - 5000); // Aproximação, mas não menor que kmInicio
 
-        const kmDesdeUltimaTroca = kmAtual - kmNaDataManutencao;
+        // Calcular KM rodado desde a última troca (apenas no período do proprietário atual)
+        const kmDesdeUltimaTroca = Math.max(0, kmAtual - Math.max(kmNaDataManutencao, kmInicio));
         const faltaKm = intervaloKm - kmDesdeUltimaTroca;
 
         const dataUltimaManutencao = ultimaTrocaOleo.data 
           ? new Date(ultimaTrocaOleo.data) 
           : new Date();
-        const mesesDesdeManutencao = (agora - dataUltimaManutencao) / (1000 * 60 * 60 * 24 * 30);
+        
+        // Considerar apenas meses desde a aquisição ou desde a última manutenção (o que for maior)
+        const dataInicioPeriodo = periodo.dataInicio ? new Date(periodo.dataInicio) : dataUltimaManutencao;
+        const dataReferencia = dataUltimaManutencao > dataInicioPeriodo ? dataUltimaManutencao : dataInicioPeriodo;
+        const mesesDesdeManutencao = (agora - dataReferencia) / (1000 * 60 * 60 * 24 * 30);
         const faltaMeses = intervaloMeses - mesesDesdeManutencao;
 
         // Classificar status
@@ -94,8 +116,8 @@ router.get('/', authRequired, async (req, res) => {
           ultimoServicoData: ultimaTrocaOleo.data,
         });
       } else {
-        // Se nunca fez troca de óleo, alertar se o veículo tem mais de 10.000 km
-        if (kmAtual > 10000) {
+        // Se nunca fez troca de óleo no período atual, alertar se rodou mais de 10.000 km no período
+        if (kmRodadoNoPeriodo > 10000) {
           alertas.push({
             tipo: 'Troca de Óleo',
             status: 'vermelho',
@@ -108,18 +130,18 @@ router.get('/', authRequired, async (req, res) => {
       }
 
       // (B) ALERTA: Revisão Geral
-      // Buscar última revisão geral (manutenção preventiva)
+      // Buscar última revisão geral (manutenção preventiva) - pode ser herdada
       const ultimaRevisao = await queryOne(
         `SELECT m.*, v.km_atual 
          FROM manutencoes m
          JOIN veiculos v ON m.veiculo_id = v.id
-         WHERE m.usuario_id = ? 
-           AND m.veiculo_id = ?
+         WHERE m.veiculo_id = ?
            AND m.tipo_manutencao = 'preventiva'
            AND m.data IS NOT NULL
+           AND (m.data >= ? OR ? IS NULL)
          ORDER BY m.data DESC, m.id DESC
          LIMIT 1`,
-        [userId, veiculoId]
+        [veiculoId, periodo.dataInicio, periodo.dataInicio]
       );
 
       if (ultimaRevisao) {
@@ -136,15 +158,20 @@ router.get('/', authRequired, async (req, res) => {
 
         const kmNaDataRevisao = kmHistorico 
           ? parseInt(kmHistorico.km) 
-          : Math.max(0, kmAtual - 5000);
+          : Math.max(kmInicio, kmAtual - 5000);
 
-        const kmDesdeUltimaRevisao = kmAtual - kmNaDataRevisao;
+        // Calcular KM rodado desde a última revisão (apenas no período do proprietário atual)
+        const kmDesdeUltimaRevisao = Math.max(0, kmAtual - Math.max(kmNaDataRevisao, kmInicio));
         const faltaKm = intervaloKm - kmDesdeUltimaRevisao;
 
         const dataUltimaRevisao = ultimaRevisao.data 
           ? new Date(ultimaRevisao.data) 
           : new Date();
-        const mesesDesdeRevisao = (agora - dataUltimaRevisao) / (1000 * 60 * 60 * 24 * 30);
+        
+        // Considerar apenas meses desde a aquisição ou desde a última revisão (o que for maior)
+        const dataInicioPeriodo = periodo.dataInicio ? new Date(periodo.dataInicio) : dataUltimaRevisao;
+        const dataReferencia = dataUltimaRevisao > dataInicioPeriodo ? dataUltimaRevisao : dataInicioPeriodo;
+        const mesesDesdeRevisao = (agora - dataReferencia) / (1000 * 60 * 60 * 24 * 30);
         const faltaMeses = intervaloMeses - mesesDesdeRevisao;
 
         // Classificar status
@@ -164,8 +191,8 @@ router.get('/', authRequired, async (req, res) => {
           ultimoServicoData: ultimaRevisao.data,
         });
       } else {
-        // Se nunca fez revisão, alertar se o veículo tem mais de 10.000 km
-        if (kmAtual > 10000) {
+        // Se nunca fez revisão no período atual, alertar se rodou mais de 10.000 km no período
+        if (kmRodadoNoPeriodo > 10000) {
           alertas.push({
             tipo: 'Revisão Geral',
             status: 'vermelho',

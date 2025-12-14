@@ -18,6 +18,9 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
     const userId = req.userId;
     const { veiculoId } = req.params;
 
+    // Importar helper de proprietário atual
+    const { getPeriodoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+
     // Validar que o veículo pertence ao usuário
     const veiculo = await queryOne(
       'SELECT id, km_atual FROM veiculos WHERE id = ? AND usuario_id = ?',
@@ -28,7 +31,13 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
       return res.status(404).json({ error: 'Veículo não encontrado' });
     }
 
-    // (A) CONSUMO: Abastecimentos com cálculo de consumo
+    // Obter período do proprietário atual
+    const periodo = await getPeriodoProprietarioAtual(veiculoId);
+    if (!periodo || !periodo.dataInicio) {
+      return res.status(404).json({ error: 'Proprietário atual não encontrado' });
+    }
+
+    // (A) CONSUMO: Abastecimentos com cálculo de consumo (apenas do proprietário atual)
     const abastecimentos = await queryAll(
       `SELECT 
         id,
@@ -40,9 +49,9 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
         preco_por_litro,
         tipo_combustivel
       FROM abastecimentos
-      WHERE veiculo_id = ? AND usuario_id = ?
+      WHERE veiculo_id = ? AND usuario_id = ? AND data >= ?
       ORDER BY data DESC, id DESC`,
-      [veiculoId, userId]
+      [veiculoId, userId, periodo.dataInicio]
     );
 
     const consumo = abastecimentos
@@ -66,21 +75,34 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
       })
       .reverse(); // Ordenar do mais antigo para o mais recente
 
-    // (B) GASTOS MENSAIS: Agrupar manutenções + abastecimentos por mês
-    const manutencoes = await queryAll(
+    // (B) GASTOS MENSAIS: Agrupar manutenções + abastecimentos por mês (apenas do proprietário atual)
+    // Importar helper para verificar se manutenção pertence ao proprietário atual
+    const { manutencaoPertenceAoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+
+    // Buscar todas as manutenções do veículo (herdáveis) no período
+    const manutencoesTodas = await queryAll(
       `SELECT data, valor
        FROM manutencoes
-       WHERE veiculo_id = ? AND usuario_id = ? AND data IS NOT NULL AND valor IS NOT NULL
+       WHERE veiculo_id = ? AND data IS NOT NULL AND valor IS NOT NULL AND data >= ?
        ORDER BY data DESC`,
-      [veiculoId, userId]
+      [veiculoId, periodo.dataInicio]
     );
+
+    // Filtrar apenas as que pertencem ao proprietário atual
+    const manutencoes = [];
+    for (const man of manutencoesTodas) {
+      const pertence = await manutencaoPertenceAoProprietarioAtual(veiculoId, man.data);
+      if (pertence) {
+        manutencoes.push(man);
+      }
+    }
 
     const abastecimentosComValor = await queryAll(
       `SELECT data, valor_total
        FROM abastecimentos
-       WHERE veiculo_id = ? AND usuario_id = ? AND data IS NOT NULL AND valor_total IS NOT NULL
+       WHERE veiculo_id = ? AND usuario_id = ? AND data IS NOT NULL AND valor_total IS NOT NULL AND data >= ?
        ORDER BY data DESC`,
-      [veiculoId, userId]
+      [veiculoId, userId, periodo.dataInicio]
     );
 
     // Agrupar por mês/ano
@@ -117,13 +139,14 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
         return a.mes - b.mes;
       });
 
-    // (C) KM RODADOS: Histórico de KM
+    // (C) KM RODADOS: Histórico de KM (apenas do período do proprietário atual)
+    const kmInicio = parseInt(periodo.kmInicio) || 0;
     const kmHistorico = await queryAll(
       `SELECT km, criado_em
        FROM km_historico
-       WHERE veiculo_id = ?
+       WHERE veiculo_id = ? AND criado_em >= ?
        ORDER BY criado_em ASC`,
-      [veiculoId]
+      [veiculoId, periodo.dataInicio]
     );
 
     const kmRodados = kmHistorico.map(item => ({
@@ -131,22 +154,50 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
       km: parseInt(item.km) || 0,
     }));
 
+    // Adicionar KM inicial do período se não estiver no histórico
+    if (kmInicio > 0 && (kmRodados.length === 0 || parseInt(kmRodados[0].km) !== kmInicio)) {
+      kmRodados.unshift({
+        data: periodo.dataInicio,
+        km: kmInicio,
+      });
+    }
+
     // Adicionar KM atual se não estiver no histórico
-    if (veiculo.km_atual && kmRodados.length === 0) {
+    if (veiculo.km_atual && (kmRodados.length === 0 || parseInt(kmRodados[kmRodados.length - 1].km) !== parseInt(veiculo.km_atual))) {
       kmRodados.push({
         data: new Date().toISOString().split('T')[0],
         km: parseInt(veiculo.km_atual) || 0,
       });
     }
 
-    // (D) DISTRIBUIÇÃO DE MANUTENÇÕES: Agrupar por tipo
-    const manutencoesComTipo = await queryAll(
-      `SELECT tipo_manutencao, area_manutencao, COUNT(*) as total
+    // (D) DISTRIBUIÇÃO DE MANUTENÇÕES: Agrupar por tipo (apenas do proprietário atual)
+    // Buscar todas as manutenções do veículo no período
+    const manutencoesComTipoTodas = await queryAll(
+      `SELECT tipo_manutencao, area_manutencao, data
        FROM manutencoes
-       WHERE veiculo_id = ? AND usuario_id = ?
-       GROUP BY tipo_manutencao, area_manutencao`,
-      [veiculoId, userId]
+       WHERE veiculo_id = ? AND data >= ?
+       ORDER BY data DESC`,
+      [veiculoId, periodo.dataInicio]
     );
+
+    // Filtrar apenas as que pertencem ao proprietário atual e agrupar
+    const distribuicaoMap = {};
+    for (const man of manutencoesComTipoTodas) {
+      const pertence = await manutencaoPertenceAoProprietarioAtual(veiculoId, man.data);
+      if (pertence) {
+        const key = `${man.tipo_manutencao || 'outras'}_${man.area_manutencao || 'outras'}`;
+        if (!distribuicaoMap[key]) {
+          distribuicaoMap[key] = {
+            tipo_manutencao: man.tipo_manutencao,
+            area_manutencao: man.area_manutencao,
+            total: 0
+          };
+        }
+        distribuicaoMap[key].total++;
+      }
+    }
+
+    const manutencoesComTipo = Object.values(distribuicaoMap);
 
     const manutencoesDistribuicao = manutencoesComTipo.map(item => {
       let tipo = 'Outras';

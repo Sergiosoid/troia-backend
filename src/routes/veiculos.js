@@ -269,23 +269,86 @@ router.put('/:id/km', authRequired, async (req, res) => {
 // Histórico de manutenções de um veículo (DEVE VIR ANTES DE /:id)
 router.get('/:id/historico', authRequired, async (req, res) => {
   try {
-  const id = req.params.id;
+    const id = req.params.id;
     const userId = req.userId; // Do middleware JWT
 
-    const rows = await queryAll(
-    `SELECT m.*, v.placa, v.renavam, p.nome as proprietarioNome
-     FROM manutencoes m
-     LEFT JOIN veiculos v ON m.veiculo_id = v.id
-     LEFT JOIN proprietarios p ON v.proprietario_id = p.id
-     WHERE m.veiculo_id = ? AND m.usuario_id = ?
-     ORDER BY m.data DESC, m.id DESC`,
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
       [id, userId]
     );
-      res.json(rows || []);
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Importar helper de proprietário atual
+    const { getProprietarioAtual, manutencaoPertenceAoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+
+    // Buscar todas as manutenções do veículo (herdáveis)
+    // IMPORTANTE: Remover filtro por usuario_id para mostrar manutenções de todos os proprietários
+    const rows = await queryAll(
+      `SELECT m.*, v.placa, v.renavam, p.nome as proprietarioNome
+       FROM manutencoes m
+       LEFT JOIN veiculos v ON m.veiculo_id = v.id
+       LEFT JOIN proprietarios p ON v.proprietario_id = p.id
+       WHERE m.veiculo_id = ?
+       ORDER BY m.data DESC, m.id DESC`,
+      [id]
+    );
+
+    // Buscar proprietário atual
+    const proprietarioAtual = await getProprietarioAtual(id);
+
+    // Processar manutenções: ocultar valores privados se não pertencerem ao proprietário atual
+    const manutencoesProcessadas = await Promise.all(
+      (rows || []).map(async (man) => {
+        const pertenceAoProprietarioAtual = await manutencaoPertenceAoProprietarioAtual(
+          id,
+          man.data || new Date().toISOString().split('T')[0]
+        );
+
+        // Campos públicos sempre visíveis
+        const manutencaoPublica = {
+          id: man.id,
+          veiculo_id: man.veiculo_id,
+          data: man.data,
+          km_antes: man.km_antes,
+          km_depois: man.km_depois,
+          tipo: man.tipo,
+          tipo_manutencao: man.tipo_manutencao,
+          area_manutencao: man.area_manutencao,
+          descricao: man.descricao,
+          imagem_url: man.imagem_url,
+          placa: man.placa,
+          renavam: man.renavam,
+          proprietarioNome: man.proprietarioNome,
+        };
+
+        // Campos privados apenas se pertencer ao proprietário atual
+        if (pertenceAoProprietarioAtual) {
+          manutencaoPublica.valor = man.valor;
+          manutencaoPublica.observacoes = man.observacoes;
+          manutencaoPublica.isProprietarioAtual = true;
+        } else {
+          manutencaoPublica.valor = null;
+          manutencaoPublica.observacoes = null;
+          manutencaoPublica.isProprietarioAtual = false;
+          // Identificar se é de proprietário anterior
+          if (proprietarioAtual && man.data < proprietarioAtual.data_aquisicao) {
+            manutencaoPublica.isProprietarioAnterior = true;
+          }
+        }
+
+        return manutencaoPublica;
+      })
+    );
+
+    res.json(manutencoesProcessadas);
   } catch (error) {
     console.error('[ERRO] Erro ao buscar histórico:', error);
     return res.status(500).json({ error: error.message || 'Erro ao buscar histórico' });
-    }
+  }
 });
 
 // Listar histórico de proprietários de um veículo (DEVE VIR ANTES DE /:id)
