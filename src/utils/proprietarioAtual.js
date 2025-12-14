@@ -105,22 +105,36 @@ export async function getProprietarioAtual(veiculoId) {
       const { isPostgres } = await import('../database/db-adapter.js');
       const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
       
+      // Tentar inserir com todas as colunas novas (data_inicio, km_inicio, origem_posse)
       try {
-        // Tentar inserir com usuario_id (se a coluna existir)
         insertQuery = `INSERT INTO proprietarios_historico 
-                       (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_venda, km_venda, criado_em) 
-                       VALUES (?, ?, ?, ?, ?, NULL, NULL, ${timestampFunc})`;
-        insertParams = [veiculoId, veiculo.usuario_id || null, nomeProprietario, dataAquisicao, kmAquisicao];
+                       (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_inicio, km_inicio, origem_posse, data_venda, km_venda, criado_em) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'usado', NULL, NULL, ${timestampFunc})`;
+        insertParams = [veiculoId, veiculo.usuario_id || null, nomeProprietario, dataAquisicao, kmAquisicao, dataAquisicao, kmAquisicao];
         
         await query(insertQuery, insertParams);
       } catch (insertError) {
-        // Se falhar (provavelmente coluna usuario_id não existe), tentar sem ela
-        if (insertError.message?.includes('usuario_id') || insertError.message?.includes('column') || insertError.message?.includes('does not exist')) {
-          insertQuery = `INSERT INTO proprietarios_historico 
-                         (veiculo_id, nome, data_aquisicao, km_aquisicao, data_venda, km_venda, criado_em) 
-                         VALUES (?, ?, ?, ?, NULL, NULL, ${timestampFunc})`;
-          insertParams = [veiculoId, nomeProprietario, dataAquisicao, kmAquisicao];
-          await query(insertQuery, insertParams);
+        // Se falhar (colunas novas podem não existir em instalações antigas), tentar versão antiga
+        if (insertError.message?.includes('data_inicio') || insertError.message?.includes('km_inicio') || insertError.message?.includes('origem_posse') || insertError.message?.includes('column') || insertError.message?.includes('does not exist')) {
+          try {
+            // Tentar com usuario_id mas sem colunas novas
+            insertQuery = `INSERT INTO proprietarios_historico 
+                           (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_venda, km_venda, criado_em) 
+                           VALUES (?, ?, ?, ?, ?, NULL, NULL, ${timestampFunc})`;
+            insertParams = [veiculoId, veiculo.usuario_id || null, nomeProprietario, dataAquisicao, kmAquisicao];
+            await query(insertQuery, insertParams);
+          } catch (insertError2) {
+            // Se ainda falhar, tentar sem usuario_id
+            if (insertError2.message?.includes('usuario_id')) {
+              insertQuery = `INSERT INTO proprietarios_historico 
+                             (veiculo_id, nome, data_aquisicao, km_aquisicao, data_venda, km_venda, criado_em) 
+                             VALUES (?, ?, ?, ?, NULL, NULL, ${timestampFunc})`;
+              insertParams = [veiculoId, nomeProprietario, dataAquisicao, kmAquisicao];
+              await query(insertQuery, insertParams);
+            } else {
+              throw insertError2;
+            }
+          }
         } else {
           throw insertError;
         }
@@ -163,13 +177,16 @@ export async function manutencaoPertenceAoProprietarioAtual(veiculoId, dataManut
       return false;
     }
     
-    // Se não há data de aquisição, considerar como pertencente
-    if (!proprietarioAtual.data_aquisicao) {
+    // Usar data_inicio se disponível, senão data_aquisicao (backward compatibility)
+    const dataInicioPeriodo = proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao;
+    
+    // Se não há data de início, considerar como pertencente
+    if (!dataInicioPeriodo) {
       return true;
     }
     
-    // Se a manutenção é anterior à aquisição, não pertence ao proprietário atual
-    if (dataManutencao < proprietarioAtual.data_aquisicao) {
+    // Se a manutenção é anterior ao início do período, não pertence ao proprietário atual
+    if (dataManutencao < dataInicioPeriodo) {
       return false;
     }
     
@@ -198,10 +215,16 @@ export async function getPeriodoProprietarioAtual(veiculoId) {
       return null;
     }
     
+    // Usar data_inicio e km_inicio se disponíveis (novo modelo), senão data_aquisicao e km_aquisicao (backward compatibility)
+    const dataInicio = proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao || null;
+    const kmInicio = proprietarioAtual.km_inicio !== null && proprietarioAtual.km_inicio !== undefined 
+      ? proprietarioAtual.km_inicio 
+      : (proprietarioAtual.km_aquisicao || null);
+    
     return {
-      dataInicio: proprietarioAtual.data_aquisicao || null,
+      dataInicio: dataInicio,
       dataFim: proprietarioAtual.data_venda || new Date().toISOString().split('T')[0],
-      kmInicio: proprietarioAtual.km_aquisicao || null,
+      kmInicio: kmInicio,
       kmFim: proprietarioAtual.km_venda || null,
     };
   } catch (error) {
@@ -255,7 +278,10 @@ export async function getResumoPeriodoProprietarioAtual(veiculoId) {
       };
     }
     
-    const kmInicioPeriodo = parseInt(proprietarioAtual.km_aquisicao) || 0;
+    // Usar km_inicio se disponível (novo modelo), senão km_aquisicao (backward compatibility)
+    const kmInicioPeriodo = proprietarioAtual.km_inicio !== null && proprietarioAtual.km_inicio !== undefined
+      ? parseInt(proprietarioAtual.km_inicio) || 0
+      : (parseInt(proprietarioAtual.km_aquisicao) || 0);
     
     // Buscar KM mínimo do histórico (KM total do veículo)
     const kmHistorico = await queryAll(
@@ -275,7 +301,7 @@ export async function getResumoPeriodoProprietarioAtual(veiculoId) {
       km_inicio_periodo: kmInicioPeriodo,
       km_atual: kmAtual,
       km_rodado_no_periodo: kmRodadoNoPeriodo,
-      data_aquisicao: proprietarioAtual.data_aquisicao || null,
+      data_aquisicao: proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao || null,
     };
   } catch (error) {
     console.error('[getResumoPeriodoProprietarioAtual] Erro:', error);

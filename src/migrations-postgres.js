@@ -283,7 +283,21 @@ const addMissingColumns = async () => {
                   AND fonte = 'abastecimento' THEN 'abastecimento'
                 ELSE 'manual'
               END
-              WHERE origem IS NULL;
+              WHERE origem IS NULL OR origem = '';
+              -- Tornar NOT NULL após preencher
+              ALTER TABLE km_historico ALTER COLUMN origem SET NOT NULL;
+            ELSE
+              -- Se coluna já existe, garantir que não há NULL ou vazio
+              UPDATE km_historico 
+              SET origem = COALESCE(NULLIF(origem, ''), 'manual')
+              WHERE origem IS NULL OR origem = '';
+              -- Tentar tornar NOT NULL (pode falhar se houver NULL, mas já corrigimos acima)
+              BEGIN
+                ALTER TABLE km_historico ALTER COLUMN origem SET NOT NULL;
+              EXCEPTION WHEN OTHERS THEN
+                -- Se falhar, apenas logar (pode ser que já seja NOT NULL)
+                NULL;
+              END;
             END IF;
             
             IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
@@ -330,17 +344,80 @@ const addMissingColumns = async () => {
         CREATE TABLE IF NOT EXISTS proprietarios_historico (
           id SERIAL PRIMARY KEY,
           veiculo_id INTEGER NOT NULL REFERENCES veiculos(id) ON DELETE CASCADE,
+          usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
           nome VARCHAR(255) NOT NULL,
           data_aquisicao DATE NOT NULL,
           data_venda DATE,
           km_aquisicao INTEGER,
           km_venda INTEGER,
+          data_inicio DATE NOT NULL,
+          km_inicio INTEGER NOT NULL,
+          origem_posse VARCHAR(50) NOT NULL DEFAULT 'usado',
           criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
       console.log('  ✓ Tabela proprietarios_historico criada');
     } else {
       console.log('  ✓ Tabela proprietarios_historico já existe');
+      // Adicionar colunas novas se não existirem
+      const dataInicioExists = await columnExists('proprietarios_historico', 'data_inicio');
+      if (!dataInicioExists) {
+        console.log('  ✓ Adicionando coluna data_inicio em proprietarios_historico...');
+        await query('ALTER TABLE proprietarios_historico ADD COLUMN data_inicio DATE');
+        // Preencher data_inicio com data_aquisicao ou criado_em
+        await query(`
+          UPDATE proprietarios_historico 
+          SET data_inicio = COALESCE(data_aquisicao, DATE(criado_em))
+          WHERE data_inicio IS NULL
+        `);
+        // Tornar NOT NULL após preencher
+        await query('ALTER TABLE proprietarios_historico ALTER COLUMN data_inicio SET NOT NULL');
+        console.log('  ✓ Coluna data_inicio adicionada e preenchida');
+      }
+
+      const kmInicioExists = await columnExists('proprietarios_historico', 'km_inicio');
+      if (!kmInicioExists) {
+        console.log('  ✓ Adicionando coluna km_inicio em proprietarios_historico...');
+        await query('ALTER TABLE proprietarios_historico ADD COLUMN km_inicio INTEGER');
+        // Preencher km_inicio com km_aquisicao ou 0
+        await query(`
+          UPDATE proprietarios_historico 
+          SET km_inicio = COALESCE(km_aquisicao, 0)
+          WHERE km_inicio IS NULL
+        `);
+        // Tornar NOT NULL após preencher
+        await query('ALTER TABLE proprietarios_historico ALTER COLUMN km_inicio SET NOT NULL');
+        console.log('  ✓ Coluna km_inicio adicionada e preenchida');
+      }
+
+      const origemPosseExists = await columnExists('proprietarios_historico', 'origem_posse');
+      if (!origemPosseExists) {
+        console.log('  ✓ Adicionando coluna origem_posse em proprietarios_historico...');
+        await query(`ALTER TABLE proprietarios_historico ADD COLUMN origem_posse VARCHAR(50) DEFAULT 'usado'`);
+        // Preencher origem_posse com 'usado' por padrão (dados legados)
+        await query(`
+          UPDATE proprietarios_historico 
+          SET origem_posse = 'usado'
+          WHERE origem_posse IS NULL OR origem_posse = ''
+        `);
+        // Tornar NOT NULL após preencher
+        await query('ALTER TABLE proprietarios_historico ALTER COLUMN origem_posse SET NOT NULL');
+        console.log('  ✓ Coluna origem_posse adicionada e preenchida');
+      }
+
+      // Verificar se usuario_id existe (pode não existir em instalações antigas)
+      const usuarioIdExists = await columnExists('proprietarios_historico', 'usuario_id');
+      if (!usuarioIdExists) {
+        console.log('  ✓ Adicionando coluna usuario_id em proprietarios_historico...');
+        await query('ALTER TABLE proprietarios_historico ADD COLUMN usuario_id INTEGER');
+        // Preencher usuario_id a partir do veiculo
+        await query(`
+          UPDATE proprietarios_historico 
+          SET usuario_id = (SELECT usuario_id FROM veiculos WHERE veiculos.id = proprietarios_historico.veiculo_id)
+          WHERE usuario_id IS NULL
+        `);
+        console.log('  ✓ Coluna usuario_id adicionada e preenchida');
+      }
     }
 
     // Verificar e adicionar colunas em manutencoes
@@ -425,6 +502,32 @@ const addMissingColumns = async () => {
     }
 
     console.log('  ✓ Todas as colunas verificadas');
+
+    // Migração de dados legados: corrigir proprietarios_historico com dados incompletos
+    console.log('  🔄 Migrando dados legados de proprietarios_historico...');
+    try {
+      // Corrigir registros onde data_inicio ou km_inicio estão NULL (não deveria acontecer após migração acima, mas garantir)
+      await query(`
+        UPDATE proprietarios_historico 
+        SET 
+          data_inicio = COALESCE(data_inicio, data_aquisicao, DATE(criado_em)),
+          km_inicio = COALESCE(km_inicio, km_aquisicao, 0),
+          origem_posse = COALESCE(NULLIF(origem_posse, ''), 'usado')
+        WHERE data_inicio IS NULL OR km_inicio IS NULL OR origem_posse IS NULL OR origem_posse = ''
+      `);
+      console.log('  ✓ Dados legados de proprietarios_historico corrigidos');
+
+      // Corrigir km_historico onde origem está NULL ou vazio
+      await query(`
+        UPDATE km_historico 
+        SET origem = COALESCE(NULLIF(origem, ''), 'manual')
+        WHERE origem IS NULL OR origem = ''
+      `);
+      console.log('  ✓ Dados legados de km_historico corrigidos');
+    } catch (migError) {
+      console.warn('  ⚠ Erro ao migrar dados legados (pode ser normal se não houver dados):', migError.message);
+      // Não bloquear se falhar (pode não haver dados para migrar)
+    }
 
   } catch (error) {
     console.error('  ✗ Erro ao adicionar colunas:', error.message);

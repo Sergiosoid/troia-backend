@@ -41,9 +41,20 @@ router.get('/', authRequired, async (req, res) => {
 // Criar novo veículo
 router.post('/', authRequired, async (req, res) => {
   try {
-    const { placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo } = req.body;
+    const { 
+      placa, 
+      renavam, 
+      proprietario_id, 
+      marca, 
+      modelo, 
+      ano, 
+      tipo_veiculo,
+      origem_posse, // 'zero_km' ou 'usado'
+      data_aquisicao, // Data de aquisição (obrigatória)
+      km_inicio // KM inicial (obrigatório se usado)
+    } = req.body;
 
-    // Validações simplificadas: apenas modelo e ano são obrigatórios
+    // Validações obrigatórias
     if (!modelo || !modelo.trim()) {
       return res.status(400).json({ error: 'Modelo é obrigatório' });
     }
@@ -51,6 +62,22 @@ router.post('/', authRequired, async (req, res) => {
     if (!ano || !ano.trim()) {
       return res.status(400).json({ error: 'Ano é obrigatório' });
     }
+
+    if (!origem_posse || !['zero_km', 'usado'].includes(origem_posse)) {
+      return res.status(400).json({ error: 'Origem da posse é obrigatória. Informe "zero_km" ou "usado"' });
+    }
+
+    if (!data_aquisicao) {
+      return res.status(400).json({ error: 'Data de aquisição é obrigatória' });
+    }
+
+    // Se usado, KM inicial é obrigatório
+    if (origem_posse === 'usado' && (!km_inicio || parseInt(km_inicio) < 0)) {
+      return res.status(400).json({ error: 'KM inicial é obrigatório para veículos usados' });
+    }
+
+    // Se zero km, KM inicial é 0
+    const kmInicioFinal = origem_posse === 'zero_km' ? 0 : parseInt(km_inicio) || 0;
 
     // Verificar unicidade por RENAVAM (se fornecido)
     if (renavam && renavam.trim()) {
@@ -76,10 +103,17 @@ router.post('/', authRequired, async (req, res) => {
       }
     }
 
+    // Buscar dados do usuário para nome do proprietário
+    const usuario = await queryOne(
+      'SELECT nome, email FROM usuarios WHERE id = ?',
+      [req.userId]
+    );
+    const nomeProprietario = usuario?.nome || usuario?.email || 'Proprietário';
+
     // Inserir veículo (proprietario_id pode ser null)
     const result = await query(
-      `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO veiculos (placa, renavam, proprietario_id, marca, modelo, ano, tipo_veiculo, usuario_id, km_atual)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         placa ? placa.trim().toUpperCase() : null,
         renavam ? renavam.trim() : null,
@@ -88,11 +122,39 @@ router.post('/', authRequired, async (req, res) => {
         modelo.trim(),
         ano.trim(),
         tipo_veiculo || null,
-        req.userId
+        req.userId,
+        kmInicioFinal
       ]
     );
 
     const id = result.insertId || null;
+
+    // Criar registro em proprietarios_historico
+    const { isPostgres } = await import('../database/db-adapter.js');
+    const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+    
+    await query(
+      `INSERT INTO proprietarios_historico 
+       (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_inicio, km_inicio, origem_posse, criado_em)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${timestampFunc})`,
+      [
+        id,
+        req.userId,
+        nomeProprietario,
+        data_aquisicao,
+        kmInicioFinal,
+        data_aquisicao,
+        kmInicioFinal,
+        origem_posse
+      ]
+    );
+
+    // Criar registro inicial em km_historico
+    await query(
+      `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
+       VALUES (?, ?, ?, 'inicio_posse', ${timestampFunc}, ${timestampFunc})`,
+      [id, req.userId, kmInicioFinal]
+    );
 
     return res.json({
       success: true,
@@ -279,6 +341,17 @@ router.put('/:id/km', authRequired, async (req, res) => {
       return res.status(403).json({ error: 'Veículo não encontrado ou não pertence ao usuário' });
     }
 
+    // Validar que existe proprietário atual válido (com data_inicio e km_inicio)
+    const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+    const proprietarioAtual = await getProprietarioAtual(id);
+    
+    if (!proprietarioAtual || !proprietarioAtual.data_inicio || proprietarioAtual.km_inicio === null || proprietarioAtual.km_inicio === undefined) {
+      return res.status(400).json({ 
+        error: 'Não é possível atualizar KM. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
+        code: 'PERIODO_POSSE_INVALIDO'
+      });
+    }
+
     // Verificar se o KM não é menor que o anterior (opcional, mas recomendado)
     if (veiculo.km_atual && kmNum < parseInt(veiculo.km_atual)) {
       return res.status(400).json({ 
@@ -288,12 +361,13 @@ router.put('/:id/km', authRequired, async (req, res) => {
 
     // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
     // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
+    // IMPORTANTE: origem nunca pode ser NULL ou vazio
     try {
       const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
          VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
-        [id, userId, kmNum, origemFinal]
+        [id, userId, kmNum, origemFinal || 'manual']
       );
       
       // Só atualizar km_atual se o histórico foi salvo com sucesso
@@ -410,20 +484,35 @@ router.post('/:id/transferir', authRequired, async (req, res) => {
       );
 
       // 2. Criar novo registro de proprietário para o novo usuário
-      await query(
-        `INSERT INTO proprietarios_historico 
-         (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_venda, km_venda)
-         VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
-        [id, novoUsuarioIdNum, novoUsuario.nome || novoUsuario.email || 'Novo Proprietário', hoje, kmAtualNum]
-      );
+      // Usar data_inicio, km_inicio e origem_posse (se colunas existirem)
+      try {
+        await query(
+          `INSERT INTO proprietarios_historico 
+           (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_inicio, km_inicio, origem_posse, data_venda, km_venda)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'transferencia', NULL, NULL)`,
+          [id, novoUsuarioIdNum, novoUsuario.nome || novoUsuario.email || 'Novo Proprietário', hoje, kmAtualNum, hoje, kmAtualNum]
+        );
+      } catch (insertError) {
+        // Se falhar (colunas novas podem não existir), tentar versão antiga
+        if (insertError.message?.includes('data_inicio') || insertError.message?.includes('km_inicio') || insertError.message?.includes('origem_posse')) {
+          await query(
+            `INSERT INTO proprietarios_historico 
+             (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_venda, km_venda)
+             VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+            [id, novoUsuarioIdNum, novoUsuario.nome || novoUsuario.email || 'Novo Proprietário', hoje, kmAtualNum]
+          );
+        } else {
+          throw insertError;
+        }
+      }
 
       // 3. Registrar KM no histórico PRIMEIRO (garantir consistência)
       try {
         const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-           VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
-          [id, novoUsuarioIdNum, kmAtualNum, 'manual']
+           VALUES (?, ?, ?, 'transferencia', ${timestampFunc}, ${timestampFunc})`,
+          [id, novoUsuarioIdNum, kmAtualNum]
         );
       } catch (histError) {
         // Se falhar ao salvar no histórico, não continuar com a transferência
@@ -1113,12 +1202,13 @@ router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (r
 
     // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
     // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
+    // IMPORTANTE: origem nunca pode ser NULL ou vazio
     try {
       const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-         VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
-        [veiculoId, userId, kmExtraido, 'ocr']
+         VALUES (?, ?, ?, 'ocr', ${timestampFunc}, ${timestampFunc})`,
+        [veiculoId, userId, kmExtraido]
       );
       
       // Só atualizar km_atual se o histórico foi salvo com sucesso
