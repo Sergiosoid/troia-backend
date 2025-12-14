@@ -19,6 +19,8 @@ import buscarRouter from './routes/buscar.js';
 import dashboardRouter from './routes/dashboard.js';
 import estatisticasRouter from './routes/estatisticas.js';
 import healthRouter from './routes/health.js';
+import compartilhamentoRouter from './routes/compartilhamento.js';
+import usuariosRouter from './routes/usuarios.js';
 
 // Carregar variáveis de ambiente
 dotenv.config();
@@ -101,9 +103,12 @@ const upload = multer({
 
 // Rotas - Ordem importa: rotas específicas antes de genéricas
 // Dashboard e Alertas devem estar registrados explicitamente
+// Compartilhamento deve vir antes (não requer auth)
+app.use('/compartilhamento', compartilhamentoRouter);
 app.use('/dashboard', dashboardRouter);
 app.use('/alertas', alertasRouter);
 app.use('/auth', authRouter);
+app.use('/usuarios', usuariosRouter);
 app.use('/buscar', buscarRouter);
 app.use('/estatisticas', estatisticasRouter);
 app.use('/proprietarios', proprietariosRouter);

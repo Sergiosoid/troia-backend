@@ -6,6 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -286,6 +287,145 @@ router.put('/:id/km', authRequired, async (req, res) => {
   } catch (error) {
     console.error('Erro ao atualizar KM:', error);
     res.status(500).json({ error: 'Erro ao atualizar KM' });
+  }
+});
+
+// Transferir veículo para outro usuário (DEVE VIR ANTES DE /:id)
+router.post('/:id/transferir', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { novo_usuario_id, km_atual } = req.body;
+    const userId = req.userId; // Usuário atual (proprietário)
+
+    // Validações
+    if (!novo_usuario_id) {
+      return res.status(400).json({ error: 'novo_usuario_id é obrigatório' });
+    }
+
+    const novoUsuarioIdNum = parseInt(novo_usuario_id);
+    if (isNaN(novoUsuarioIdNum) || novoUsuarioIdNum <= 0) {
+      return res.status(400).json({ error: 'ID do novo usuário inválido' });
+    }
+
+    // Verificar se o veículo existe e pertence ao usuário atual
+    const veiculo = await queryOne(
+      'SELECT id, usuario_id, km_atual FROM veiculos WHERE id = ?',
+      [id]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Verificar se o usuário atual é o proprietário do veículo
+    if (parseInt(veiculo.usuario_id) !== userId) {
+      return res.status(403).json({ 
+        error: 'Apenas o proprietário atual pode transferir o veículo' 
+      });
+    }
+
+    // Verificar se não está tentando transferir para si mesmo
+    if (novoUsuarioIdNum === userId) {
+      return res.status(400).json({ error: 'Não é possível transferir o veículo para você mesmo' });
+    }
+
+    // Verificar se o novo usuário existe
+    const novoUsuario = await queryOne(
+      'SELECT id, nome, email FROM usuarios WHERE id = ?',
+      [novoUsuarioIdNum]
+    );
+
+    if (!novoUsuario) {
+      return res.status(404).json({ error: 'Novo usuário não encontrado' });
+    }
+
+    // Importar helper de proprietário atual
+    const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+
+    // Buscar proprietário atual
+    const proprietarioAtual = await getProprietarioAtual(id);
+
+    if (!proprietarioAtual) {
+      return res.status(400).json({ 
+        error: 'Não foi possível identificar o proprietário atual do veículo' 
+      });
+    }
+
+    // Verificar se o proprietário atual corresponde ao usuário atual
+    if (parseInt(proprietarioAtual.usuario_id) !== userId) {
+      return res.status(403).json({ 
+        error: 'Apenas o proprietário atual pode transferir o veículo' 
+      });
+    }
+
+    // Obter KM atual (usar o fornecido ou o do veículo)
+    const kmAtualNum = km_atual 
+      ? parseInt(km_atual.toString().replace(/\D/g, ''), 10)
+      : parseInt(veiculo.km_atual) || 0;
+
+    if (isNaN(kmAtualNum) || kmAtualNum < 0) {
+      return res.status(400).json({ error: 'KM atual inválido' });
+    }
+
+    // Data de hoje para encerrar o período atual
+    const hoje = new Date().toISOString().split('T')[0];
+
+    // Iniciar transação (simulada com try/catch)
+    try {
+      // 1. Encerrar proprietário atual (data_venda = hoje, km_venda = km_atual)
+      await query(
+        `UPDATE proprietarios_historico 
+         SET data_venda = ?, km_venda = ?
+         WHERE id = ? AND veiculo_id = ?`,
+        [hoje, kmAtualNum, proprietarioAtual.id, id]
+      );
+
+      // 2. Criar novo registro de proprietário para o novo usuário
+      await query(
+        `INSERT INTO proprietarios_historico 
+         (veiculo_id, usuario_id, nome, data_aquisicao, km_aquisicao, data_venda, km_venda)
+         VALUES (?, ?, ?, ?, ?, NULL, NULL)`,
+        [id, novoUsuarioIdNum, novoUsuario.nome || novoUsuario.email || 'Novo Proprietário', hoje, kmAtualNum]
+      );
+
+      // 3. Atualizar veiculo.usuario_id para o novo proprietário
+      await query(
+        'UPDATE veiculos SET usuario_id = ?, km_atual = ? WHERE id = ?',
+        [novoUsuarioIdNum, kmAtualNum, id]
+      );
+
+      // 4. Registrar KM no histórico (origem: 'manual')
+      try {
+        await query(
+          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
+           VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+          [id, novoUsuarioIdNum, kmAtualNum, 'manual']
+        );
+      } catch (histError) {
+        // Não crítico, apenas logar
+        console.warn('[AVISO] Erro ao salvar KM no histórico durante transferência:', histError.message);
+      }
+
+      res.json({
+        success: true,
+        mensagem: 'Veículo transferido com sucesso',
+        veiculo: {
+          id: parseInt(id),
+          novo_proprietario: {
+            id: novoUsuarioIdNum,
+            nome: novoUsuario.nome || novoUsuario.email,
+          },
+          km_atual: kmAtualNum,
+          data_transferencia: hoje,
+        },
+      });
+    } catch (transError) {
+      console.error('Erro durante transferência:', transError);
+      throw transError;
+    }
+  } catch (error) {
+    console.error('Erro ao transferir veículo:', error);
+    res.status(500).json({ error: 'Erro ao transferir veículo' });
   }
 });
 

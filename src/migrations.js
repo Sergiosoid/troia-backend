@@ -357,6 +357,30 @@ const addMissingColumns = async (db) => {
       }
     }
 
+    // SQLite: criar tabela veiculo_compartilhamentos
+    const compartilhamentosExists = await tableExists(db, 'veiculo_compartilhamentos');
+    if (!compartilhamentosExists) {
+      console.log('  ✓ Criando tabela veiculo_compartilhamentos...');
+      await runSQL(db, `
+        CREATE TABLE IF NOT EXISTS veiculo_compartilhamentos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          veiculo_id INTEGER NOT NULL,
+          token TEXT UNIQUE NOT NULL,
+          tipo TEXT NOT NULL DEFAULT 'visualizacao',
+          criado_por_usuario_id INTEGER NOT NULL,
+          expira_em TEXT,
+          criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (veiculo_id) REFERENCES veiculos(id) ON DELETE CASCADE,
+          FOREIGN KEY (criado_por_usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+        )
+      `);
+      // Criar índice para busca rápida por token
+      await runSQL(db, 'CREATE INDEX IF NOT EXISTS idx_compartilhamentos_token ON veiculo_compartilhamentos(token)');
+      console.log('  ✓ Tabela veiculo_compartilhamentos criada');
+    } else {
+      console.log('  ✓ Tabela veiculo_compartilhamentos já existe');
+    }
+
     // SQLite: criar tabela proprietarios_historico
     const proprietariosHistoricoExists = await tableExists(db, 'proprietarios_historico');
     if (!proprietariosHistoricoExists) {

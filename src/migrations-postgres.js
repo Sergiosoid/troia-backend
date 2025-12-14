@@ -301,6 +301,27 @@ const addMissingColumns = async () => {
       }
     }
 
+    // Criar tabela veiculo_compartilhamentos se não existir
+    const compartilhamentosExists = await tableExists('veiculo_compartilhamentos');
+    if (!compartilhamentosExists) {
+      console.log('  ✓ Criando tabela veiculo_compartilhamentos...');
+      await query(`
+        CREATE TABLE IF NOT EXISTS veiculo_compartilhamentos (
+          id SERIAL PRIMARY KEY,
+          veiculo_id INTEGER NOT NULL REFERENCES veiculos(id) ON DELETE CASCADE,
+          token TEXT UNIQUE NOT NULL,
+          tipo TEXT NOT NULL DEFAULT 'visualizacao',
+          criado_por_usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+          expira_em TIMESTAMP,
+          criado_em TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+      await query('CREATE INDEX IF NOT EXISTS idx_compartilhamentos_token ON veiculo_compartilhamentos(token)');
+      console.log('  ✓ Tabela veiculo_compartilhamentos criada');
+    } else {
+      console.log('  ✓ Tabela veiculo_compartilhamentos já existe');
+    }
+
     // Criar tabela proprietarios_historico se não existir
     const proprietariosHistoricoExists = await tableExists('proprietarios_historico');
     if (!proprietariosHistoricoExists) {
