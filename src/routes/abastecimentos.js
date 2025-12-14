@@ -192,8 +192,20 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
       ]
     );
 
-    // Atualizar km_atual do veículo se km_depois foi informado
+    // Atualizar km_atual do veículo e salvar no histórico se km_depois foi informado
     if (kmDepois) {
+      // Salvar no histórico de KM
+      try {
+        await query(
+          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
+           VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+          [veiculo_id, userId, kmDepois, 'abastecimento']
+        );
+      } catch (histError) {
+        console.warn('[AVISO] Erro ao salvar KM no histórico:', histError.message);
+      }
+
+      // Atualizar km_atual do veículo
       await query(
         'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
         [kmDepois, veiculo_id, userId]

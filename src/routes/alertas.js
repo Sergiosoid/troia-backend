@@ -73,12 +73,12 @@ router.get('/', authRequired, async (req, res) => {
         const intervaloKm = 10000;
         const intervaloMeses = 6;
 
-        // Buscar KM na data da última manutenção
+        // Buscar KM na data da última manutenção (usar histórico de KM)
         const kmHistorico = await queryOne(
           `SELECT km FROM km_historico 
-           WHERE veiculo_id = ? AND criado_em <= ?
-           ORDER BY criado_em DESC LIMIT 1`,
-          [veiculoId, ultimaTrocaOleo.data || new Date()]
+           WHERE veiculo_id = ? AND (data_registro <= ? OR criado_em <= ?)
+           ORDER BY data_registro DESC, criado_em DESC LIMIT 1`,
+          [veiculoId, ultimaTrocaOleo.data || new Date(), ultimaTrocaOleo.data || new Date()]
         );
 
         const kmNaDataManutencao = kmHistorico 
@@ -148,12 +148,12 @@ router.get('/', authRequired, async (req, res) => {
         const intervaloKm = 10000;
         const intervaloMeses = 12;
 
-        // Buscar KM na data da última revisão
+        // Buscar KM na data da última revisão (usar histórico de KM)
         const kmHistorico = await queryOne(
           `SELECT km FROM km_historico 
-           WHERE veiculo_id = ? AND criado_em <= ?
-           ORDER BY criado_em DESC LIMIT 1`,
-          [veiculoId, ultimaRevisao.data || new Date()]
+           WHERE veiculo_id = ? AND (data_registro <= ? OR criado_em <= ?)
+           ORDER BY data_registro DESC, criado_em DESC LIMIT 1`,
+          [veiculoId, ultimaRevisao.data || new Date(), ultimaRevisao.data || new Date()]
         );
 
         const kmNaDataRevisao = kmHistorico 

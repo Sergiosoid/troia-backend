@@ -245,14 +245,60 @@ const addMissingColumns = async () => {
         CREATE TABLE IF NOT EXISTS km_historico (
           id SERIAL PRIMARY KEY,
           veiculo_id INTEGER NOT NULL REFERENCES veiculos(id) ON DELETE CASCADE,
+          usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
           km INTEGER NOT NULL,
-          fonte TEXT NOT NULL,
+          origem TEXT NOT NULL DEFAULT 'manual',
+          data_registro TIMESTAMP NOT NULL DEFAULT NOW(),
           criado_em TIMESTAMP NOT NULL DEFAULT NOW()
         )
       `);
       console.log('  ✓ Tabela km_historico criada');
     } else {
       console.log('  ✓ Tabela km_historico já existe');
+      // Adicionar colunas se não existirem (PostgreSQL)
+      try {
+        await query(`
+          DO $$ 
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name = 'km_historico' AND column_name = 'usuario_id') THEN
+              ALTER TABLE km_historico ADD COLUMN usuario_id INTEGER;
+              UPDATE km_historico 
+              SET usuario_id = (SELECT usuario_id FROM veiculos WHERE veiculos.id = km_historico.veiculo_id)
+              WHERE usuario_id IS NULL;
+              ALTER TABLE km_historico ADD CONSTRAINT fk_km_historico_usuario 
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE;
+            END IF;
+            
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name = 'km_historico' AND column_name = 'origem') THEN
+              ALTER TABLE km_historico ADD COLUMN origem TEXT DEFAULT 'manual';
+              UPDATE km_historico 
+              SET origem = CASE 
+                WHEN EXISTS (SELECT 1 FROM information_schema.columns 
+                             WHERE table_name = 'km_historico' AND column_name = 'fonte')
+                  AND fonte = 'foto' THEN 'ocr'
+                WHEN EXISTS (SELECT 1 FROM information_schema.columns 
+                             WHERE table_name = 'km_historico' AND column_name = 'fonte')
+                  AND fonte = 'abastecimento' THEN 'abastecimento'
+                ELSE 'manual'
+              END
+              WHERE origem IS NULL;
+            END IF;
+            
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                          WHERE table_name = 'km_historico' AND column_name = 'data_registro') THEN
+              ALTER TABLE km_historico ADD COLUMN data_registro TIMESTAMP DEFAULT NOW();
+              UPDATE km_historico 
+              SET data_registro = COALESCE(criado_em, NOW())
+              WHERE data_registro IS NULL;
+            END IF;
+          END $$;
+        `);
+        console.log('  ✓ Colunas adicionadas à tabela km_historico (se necessário)');
+      } catch (err) {
+        console.warn('  ⚠️  Erro ao adicionar colunas:', err.message);
+      }
     }
 
     // Criar tabela proprietarios_historico se não existir

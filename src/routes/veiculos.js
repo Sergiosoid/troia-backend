@@ -227,7 +227,7 @@ router.post('/ocr-km', authRequired, upload.single('imagem'), async (req, res) =
 router.put('/:id/km', authRequired, async (req, res) => {
   try {
     const { id } = req.params;
-    const { km_atual } = req.body;
+    const { km_atual, origem = 'manual' } = req.body;
     const userId = req.userId;
 
     // Validações
@@ -240,9 +240,13 @@ router.put('/:id/km', authRequired, async (req, res) => {
       return res.status(400).json({ error: 'KM inválido' });
     }
 
+    // Validar origem
+    const origensValidas = ['manual', 'ocr', 'abastecimento'];
+    const origemFinal = origensValidas.includes(origem) ? origem : 'manual';
+
     // Verificar se veículo pertence ao usuário
     const veiculo = await queryOne(
-      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
+      'SELECT id, km_atual FROM veiculos WHERE id = ? AND usuario_id = ?',
       [id, userId]
     );
 
@@ -250,7 +254,26 @@ router.put('/:id/km', authRequired, async (req, res) => {
       return res.status(403).json({ error: 'Veículo não encontrado ou não pertence ao usuário' });
     }
 
-    // Atualizar KM
+    // Verificar se o KM não é menor que o anterior (opcional, mas recomendado)
+    if (veiculo.km_atual && kmNum < parseInt(veiculo.km_atual)) {
+      return res.status(400).json({ 
+        error: 'KM informado é menor que o atual. Confirme se está correto.' 
+      });
+    }
+
+    // Salvar no histórico de KM (sempre criar novo registro)
+    try {
+      await query(
+        `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
+         VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [id, userId, kmNum, origemFinal]
+      );
+    } catch (histError) {
+      // Se a tabela não existir ou erro, apenas logar (não é crítico para atualização)
+      console.warn('[AVISO] Erro ao salvar no histórico de KM:', histError.message);
+    }
+
+    // Atualizar KM atual do veículo
     await query(
       'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
       [kmNum, id, userId]
@@ -263,6 +286,60 @@ router.put('/:id/km', authRequired, async (req, res) => {
   } catch (error) {
     console.error('Erro ao atualizar KM:', error);
     res.status(500).json({ error: 'Erro ao atualizar KM' });
+  }
+});
+
+// Histórico de KM de um veículo (DEVE VIR ANTES DE /:id)
+router.get('/:id/km-historico', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // Verificar se veículo pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    // Importar helper de proprietário atual
+    const { getPeriodoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
+
+    // Obter período do proprietário atual
+    const periodo = await getPeriodoProprietarioAtual(id);
+    
+    // Buscar histórico de KM
+    let querySql = `
+      SELECT 
+        id,
+        veiculo_id,
+        usuario_id,
+        km,
+        origem,
+        data_registro,
+        criado_em
+      FROM km_historico
+      WHERE veiculo_id = ?
+    `;
+    const params = [id];
+
+    // Filtrar por período do proprietário atual se existir
+    if (periodo && periodo.dataInicio) {
+      querySql += ` AND data_registro >= ?`;
+      params.push(periodo.dataInicio);
+    }
+
+    querySql += ` ORDER BY data_registro DESC, criado_em DESC`;
+
+    const historico = await queryAll(querySql, params);
+
+    res.json(historico || []);
+  } catch (error) {
+    console.error('Erro ao buscar histórico de KM:', error);
+    res.status(500).json({ error: 'Erro ao buscar histórico de KM' });
   }
 });
 
@@ -575,18 +652,19 @@ router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (r
       return res.status(400).json({ error: "KM detectado é menor que o atual. Confirme manualmente." });
     }
 
-    // Salvar histórico de KM (se a tabela existir)
+    // Salvar no histórico de KM (sempre criar novo registro)
     try {
       await query(
-        "INSERT INTO km_historico (veiculo_id, km, fonte, criado_em) VALUES (?, ?, ?, datetime('now'))",
-        [veiculoId, kmExtraido, "foto"]
+        `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
+         VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [veiculoId, userId, kmExtraido, 'ocr']
       );
     } catch (histError) {
-      // Se a tabela não existir, apenas logar (não é crítico)
-      console.warn('[AVISO] Tabela km_historico não existe ou erro ao inserir:', histError.message);
+      // Se a tabela não existir ou erro, apenas logar (não é crítico)
+      console.warn('[AVISO] Erro ao salvar no histórico de KM:', histError.message);
     }
 
-    // Atualizar veículo
+    // Atualizar KM atual do veículo
     await query(
       "UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?",
       [kmExtraido, veiculoId, userId]

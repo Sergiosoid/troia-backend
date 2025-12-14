@@ -285,15 +285,76 @@ const addMissingColumns = async (db) => {
         CREATE TABLE IF NOT EXISTS km_historico (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           veiculo_id INTEGER NOT NULL,
+          usuario_id INTEGER NOT NULL,
           km INTEGER NOT NULL,
-          fonte TEXT NOT NULL,
+          origem TEXT NOT NULL DEFAULT 'manual',
+          data_registro TEXT DEFAULT CURRENT_TIMESTAMP,
           criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (veiculo_id) REFERENCES veiculos(id) ON DELETE CASCADE
+          FOREIGN KEY (veiculo_id) REFERENCES veiculos(id) ON DELETE CASCADE,
+          FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
         )
       `);
       console.log('  ✓ Tabela km_historico criada');
     } else {
       console.log('  ✓ Tabela km_historico já existe');
+      // Adicionar colunas se não existirem
+      const usuarioIdExists = await columnExists(db, 'km_historico', 'usuario_id');
+      if (!usuarioIdExists) {
+        console.log('  ✓ Adicionando coluna usuario_id à tabela km_historico...');
+        try {
+          await runSQL(db, 'ALTER TABLE km_historico ADD COLUMN usuario_id INTEGER');
+          // Atualizar registros existentes com usuario_id do veículo
+          await runSQL(db, `
+            UPDATE km_historico 
+            SET usuario_id = (SELECT usuario_id FROM veiculos WHERE veiculos.id = km_historico.veiculo_id)
+            WHERE usuario_id IS NULL
+          `);
+          console.log('  ✓ Coluna usuario_id adicionada');
+        } catch (err) {
+          console.warn('  ⚠️  Erro ao adicionar usuario_id:', err.message);
+        }
+      }
+      
+      const origemExists = await columnExists(db, 'km_historico', 'origem');
+      if (!origemExists) {
+        console.log('  ✓ Adicionando coluna origem à tabela km_historico...');
+        try {
+          await runSQL(db, 'ALTER TABLE km_historico ADD COLUMN origem TEXT DEFAULT \'manual\'');
+          // Migrar dados de 'fonte' para 'origem' se existir
+          const fonteExists = await columnExists(db, 'km_historico', 'fonte');
+          if (fonteExists) {
+            await runSQL(db, `
+              UPDATE km_historico 
+              SET origem = CASE 
+                WHEN fonte = 'foto' THEN 'ocr'
+                WHEN fonte = 'abastecimento' THEN 'abastecimento'
+                ELSE 'manual'
+              END
+              WHERE origem IS NULL OR origem = 'manual'
+            `);
+          }
+          console.log('  ✓ Coluna origem adicionada');
+        } catch (err) {
+          console.warn('  ⚠️  Erro ao adicionar origem:', err.message);
+        }
+      }
+      
+      const dataRegistroExists = await columnExists(db, 'km_historico', 'data_registro');
+      if (!dataRegistroExists) {
+        console.log('  ✓ Adicionando coluna data_registro à tabela km_historico...');
+        try {
+          await runSQL(db, 'ALTER TABLE km_historico ADD COLUMN data_registro TEXT DEFAULT CURRENT_TIMESTAMP');
+          // Copiar criado_em para data_registro se não existir
+          await runSQL(db, `
+            UPDATE km_historico 
+            SET data_registro = COALESCE(criado_em, CURRENT_TIMESTAMP)
+            WHERE data_registro IS NULL
+          `);
+          console.log('  ✓ Coluna data_registro adicionada');
+        } catch (err) {
+          console.warn('  ⚠️  Erro ao adicionar data_registro:', err.message);
+        }
+      }
     }
 
     // SQLite: criar tabela proprietarios_historico

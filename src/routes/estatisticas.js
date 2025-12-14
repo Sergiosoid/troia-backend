@@ -142,16 +142,17 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
     // (C) KM RODADOS: Histórico de KM (apenas do período do proprietário atual)
     const kmInicio = parseInt(periodo.kmInicio) || 0;
     const kmHistorico = await queryAll(
-      `SELECT km, criado_em
+      `SELECT km, COALESCE(data_registro, criado_em) as data_registro, origem
        FROM km_historico
-       WHERE veiculo_id = ? AND criado_em >= ?
-       ORDER BY criado_em ASC`,
-      [veiculoId, periodo.dataInicio]
+       WHERE veiculo_id = ? AND (data_registro >= ? OR criado_em >= ?)
+       ORDER BY data_registro ASC, criado_em ASC`,
+      [veiculoId, periodo.dataInicio, periodo.dataInicio]
     );
 
     const kmRodados = kmHistorico.map(item => ({
-      data: item.criado_em,
+      data: item.data_registro || item.criado_em,
       km: parseInt(item.km) || 0,
+      origem: item.origem || 'manual',
     }));
 
     // Adicionar KM inicial do período se não estiver no histórico
