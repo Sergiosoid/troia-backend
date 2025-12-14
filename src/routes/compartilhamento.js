@@ -54,23 +54,39 @@ router.get('/:token', async (req, res) => {
       return res.status(404).json({ error: 'Veículo não encontrado' });
     }
 
-    // Buscar histórico completo de manutenções (sem valores privados)
+    // Buscar histórico completo de manutenções (sem valores privados) com KM derivado de km_historico
     const manutencoes = await queryAll(
       `SELECT 
-        id,
-        veiculo_id,
-        data,
-        km_antes,
-        km_depois,
-        tipo,
-        tipo_manutencao,
-        area_manutencao,
-        descricao,
-        imagem_url,
-        imagem
-      FROM manutencoes
-      WHERE veiculo_id = ?
-      ORDER BY data DESC, id DESC`,
+        m.id,
+        m.veiculo_id,
+        m.data,
+        km_antes.km AS km_antes,
+        km_depois.km AS km_depois,
+        m.tipo,
+        m.tipo_manutencao,
+        m.area_manutencao,
+        m.descricao,
+        m.imagem as imagem_url,
+        m.imagem
+      FROM manutencoes m
+      LEFT JOIN LATERAL (
+        SELECT km
+        FROM km_historico
+        WHERE veiculo_id = m.veiculo_id
+          AND COALESCE(data_registro, criado_em) <= m.data
+        ORDER BY COALESCE(data_registro, criado_em) DESC
+        LIMIT 1
+      ) km_antes ON true
+      LEFT JOIN LATERAL (
+        SELECT km
+        FROM km_historico
+        WHERE veiculo_id = m.veiculo_id
+          AND COALESCE(data_registro, criado_em) >= m.data
+        ORDER BY COALESCE(data_registro, criado_em) ASC
+        LIMIT 1
+      ) km_depois ON true
+      WHERE m.veiculo_id = ?
+      ORDER BY m.data DESC, m.id DESC`,
       [veiculoId]
     );
 

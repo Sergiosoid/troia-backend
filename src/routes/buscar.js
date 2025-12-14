@@ -188,14 +188,46 @@ router.get('/', authRequired, async (req, res) => {
         paramsManutencao.push(...paramsValor);
       }
 
-      if (kmMin) {
-        condicoesManutencao.push('(m.km_antes >= ? OR m.km_depois >= ?)');
-        paramsManutencao.push(parseInt(kmMin), parseInt(kmMin));
-      }
-
-      if (kmMax) {
-        condicoesManutencao.push('(m.km_antes <= ? OR m.km_depois <= ?)');
-        paramsManutencao.push(parseInt(kmMax), parseInt(kmMax));
+      // Construir condições de KM usando subquery (usar ? pois db-adapter converte para PostgreSQL)
+      let condicoesKmManutencao = [];
+      if (kmMin || kmMax) {
+        // Usar subquery para calcular km_antes e km_depois
+        if (kmMin) {
+          condicoesKmManutencao.push(`(
+            EXISTS (
+              SELECT 1 FROM km_historico kh1 
+              WHERE kh1.veiculo_id = m.veiculo_id 
+                AND COALESCE(kh1.data_registro, kh1.criado_em) <= m.data 
+                AND kh1.km >= ?
+              ORDER BY COALESCE(kh1.data_registro, kh1.criado_em) DESC LIMIT 1
+            ) OR EXISTS (
+              SELECT 1 FROM km_historico kh2 
+              WHERE kh2.veiculo_id = m.veiculo_id 
+                AND COALESCE(kh2.data_registro, kh2.criado_em) >= m.data 
+                AND kh2.km >= ?
+              ORDER BY COALESCE(kh2.data_registro, kh2.criado_em) ASC LIMIT 1
+            )
+          )`);
+          paramsManutencao.push(parseInt(kmMin), parseInt(kmMin));
+        }
+        if (kmMax) {
+          condicoesKmManutencao.push(`(
+            EXISTS (
+              SELECT 1 FROM km_historico kh3 
+              WHERE kh3.veiculo_id = m.veiculo_id 
+                AND COALESCE(kh3.data_registro, kh3.criado_em) <= m.data 
+                AND kh3.km <= ?
+              ORDER BY COALESCE(kh3.data_registro, kh3.criado_em) DESC LIMIT 1
+            ) OR EXISTS (
+              SELECT 1 FROM km_historico kh4 
+              WHERE kh4.veiculo_id = m.veiculo_id 
+                AND COALESCE(kh4.data_registro, kh4.criado_em) >= m.data 
+                AND kh4.km <= ?
+              ORDER BY COALESCE(kh4.data_registro, kh4.criado_em) ASC LIMIT 1
+            )
+          )`);
+          paramsManutencao.push(parseInt(kmMax), parseInt(kmMax));
+        }
       }
 
       const queryManutencoes = `
@@ -204,17 +236,33 @@ router.get('/', authRequired, async (req, res) => {
           m.descricao,
           m.data,
           m.valor,
-          m.km_antes,
-          m.km_depois,
+          km_antes.km AS km_antes,
+          km_depois.km AS km_depois,
           m.tipo_manutencao,
           m.area_manutencao,
-          m.imagem_url,
+          m.imagem as imagem_url,
           v.id as veiculo_id,
           v.placa as veiculo_placa,
           v.modelo as veiculo_modelo
         FROM manutencoes m
         INNER JOIN veiculos v ON m.veiculo_id = v.id
-        WHERE ${condicoesManutencao.join(' AND ')}
+        LEFT JOIN LATERAL (
+          SELECT km
+          FROM km_historico
+          WHERE veiculo_id = m.veiculo_id
+            AND COALESCE(data_registro, criado_em) <= m.data
+          ORDER BY COALESCE(data_registro, criado_em) DESC
+          LIMIT 1
+        ) km_antes ON true
+        LEFT JOIN LATERAL (
+          SELECT km
+          FROM km_historico
+          WHERE veiculo_id = m.veiculo_id
+            AND COALESCE(data_registro, criado_em) >= m.data
+          ORDER BY COALESCE(data_registro, criado_em) ASC
+          LIMIT 1
+        ) km_depois ON true
+        WHERE ${[...condicoesManutencao, ...condicoesKmManutencao].join(' AND ')}
         ORDER BY 
           CASE 
             WHEN LOWER(m.descricao) LIKE ? THEN 1

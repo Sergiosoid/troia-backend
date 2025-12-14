@@ -411,6 +411,14 @@ const addMissingColumns = async () => {
         console.log('  ✓ Coluna area_manutencao adicionada em manutencoes');
       }
 
+      // Adicionar coluna km (opcional, para referência direta se necessário)
+      const kmExists = await columnExists('manutencoes', 'km');
+      if (!kmExists) {
+        console.log('  ✓ Adicionando coluna km em manutencoes...');
+        await query('ALTER TABLE manutencoes ADD COLUMN km INTEGER');
+        console.log('  ✓ Coluna km adicionada em manutencoes');
+      }
+
       console.log('  ✅ Migrações ajustadas: tabela "manutencoes" padronizada.');
     } else {
       console.log('  ⚠ Tabela manutencoes não existe ainda (será criada na próxima execução)');

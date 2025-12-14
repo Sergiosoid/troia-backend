@@ -541,13 +541,35 @@ router.get('/:id/historico', authRequired, async (req, res) => {
     // Importar helper de proprietário atual
     const { getProprietarioAtual, manutencaoPertenceAoProprietarioAtual } = await import('../utils/proprietarioAtual.js');
 
-    // Buscar todas as manutenções do veículo (herdáveis)
+    // Buscar todas as manutenções do veículo (herdáveis) com KM derivado de km_historico
     // IMPORTANTE: Remover filtro por usuario_id para mostrar manutenções de todos os proprietários
     const rows = await queryAll(
-      `SELECT m.*, v.placa, v.renavam, p.nome as proprietarioNome
+      `SELECT 
+        m.*, 
+        v.placa, 
+        v.renavam, 
+        p.nome as proprietarioNome,
+        km_antes.km AS km_antes,
+        km_depois.km AS km_depois
        FROM manutencoes m
        LEFT JOIN veiculos v ON m.veiculo_id = v.id
        LEFT JOIN proprietarios p ON v.proprietario_id = p.id
+       LEFT JOIN LATERAL (
+         SELECT km
+         FROM km_historico
+         WHERE veiculo_id = m.veiculo_id
+           AND COALESCE(data_registro, criado_em) <= m.data
+         ORDER BY COALESCE(data_registro, criado_em) DESC
+         LIMIT 1
+       ) km_antes ON true
+       LEFT JOIN LATERAL (
+         SELECT km
+         FROM km_historico
+         WHERE veiculo_id = m.veiculo_id
+           AND COALESCE(data_registro, criado_em) >= m.data
+         ORDER BY COALESCE(data_registro, criado_em) ASC
+         LIMIT 1
+       ) km_depois ON true
        WHERE m.veiculo_id = ?
        ORDER BY m.data DESC, m.id DESC`,
       [id]
@@ -787,19 +809,35 @@ router.get('/:id/timeline', authRequired, async (req, res) => {
       }
     }
 
-    // 2. Buscar manutenções
+    // 2. Buscar manutenções com KM derivado de km_historico
     const manutencoes = await queryAll(
       `SELECT 
         m.id,
         m.data,
         m.descricao,
-        m.km_antes,
-        m.km_depois,
+        km_antes.km AS km_antes,
+        km_depois.km AS km_depois,
         m.tipo,
         m.tipo_manutencao,
         m.valor,
-        m.imagem_url
+        m.imagem as imagem_url
       FROM manutencoes m
+      LEFT JOIN LATERAL (
+        SELECT km
+        FROM km_historico
+        WHERE veiculo_id = m.veiculo_id
+          AND COALESCE(data_registro, criado_em) <= m.data
+        ORDER BY COALESCE(data_registro, criado_em) DESC
+        LIMIT 1
+      ) km_antes ON true
+      LEFT JOIN LATERAL (
+        SELECT km
+        FROM km_historico
+        WHERE veiculo_id = m.veiculo_id
+          AND COALESCE(data_registro, criado_em) >= m.data
+        ORDER BY COALESCE(data_registro, criado_em) ASC
+        LIMIT 1
+      ) km_depois ON true
       WHERE m.veiculo_id = ?
       ORDER BY m.data ASC, m.id ASC`,
       [id]
