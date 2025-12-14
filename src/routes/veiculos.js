@@ -262,23 +262,27 @@ router.put('/:id/km', authRequired, async (req, res) => {
       });
     }
 
-    // Salvar no histórico de KM (sempre criar novo registro)
+    // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
+    // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
     try {
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
          VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
         [id, userId, kmNum, origemFinal]
       );
+      
+      // Só atualizar km_atual se o histórico foi salvo com sucesso
+      await query(
+        'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
+        [kmNum, id, userId]
+      );
     } catch (histError) {
-      // Se a tabela não existir ou erro, apenas logar (não é crítico para atualização)
-      console.warn('[AVISO] Erro ao salvar no histórico de KM:', histError.message);
+      // Se falhar ao salvar no histórico, NÃO atualizar km_atual e retornar erro
+      console.error('[ERRO CRÍTICO] Falha ao salvar no histórico de KM:', histError.message);
+      return res.status(500).json({ 
+        error: 'Erro ao salvar histórico de KM. A atualização foi cancelada para manter a integridade dos dados.' 
+      });
     }
-
-    // Atualizar KM atual do veículo
-    await query(
-      'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
-      [kmNum, id, userId]
-    );
 
     res.json({ 
       success: true,
@@ -388,13 +392,7 @@ router.post('/:id/transferir', authRequired, async (req, res) => {
         [id, novoUsuarioIdNum, novoUsuario.nome || novoUsuario.email || 'Novo Proprietário', hoje, kmAtualNum]
       );
 
-      // 3. Atualizar veiculo.usuario_id para o novo proprietário
-      await query(
-        'UPDATE veiculos SET usuario_id = ?, km_atual = ? WHERE id = ?',
-        [novoUsuarioIdNum, kmAtualNum, id]
-      );
-
-      // 4. Registrar KM no histórico (origem: 'manual')
+      // 3. Registrar KM no histórico PRIMEIRO (garantir consistência)
       try {
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
@@ -402,9 +400,16 @@ router.post('/:id/transferir', authRequired, async (req, res) => {
           [id, novoUsuarioIdNum, kmAtualNum, 'manual']
         );
       } catch (histError) {
-        // Não crítico, apenas logar
-        console.warn('[AVISO] Erro ao salvar KM no histórico durante transferência:', histError.message);
+        // Se falhar ao salvar no histórico, não continuar com a transferência
+        console.error('[ERRO CRÍTICO] Falha ao salvar KM no histórico durante transferência:', histError.message);
+        throw new Error('Erro ao salvar histórico de KM. A transferência foi cancelada.');
       }
+
+      // 4. Atualizar veiculo.usuario_id e km_atual APÓS salvar no histórico
+      await query(
+        'UPDATE veiculos SET usuario_id = ?, km_atual = ? WHERE id = ?',
+        [novoUsuarioIdNum, kmAtualNum, id]
+      );
 
       res.json({
         success: true,
@@ -1042,23 +1047,27 @@ router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (r
       return res.status(400).json({ error: "KM detectado é menor que o atual. Confirme manualmente." });
     }
 
-    // Salvar no histórico de KM (sempre criar novo registro)
+    // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
+    // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
     try {
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
          VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
         [veiculoId, userId, kmExtraido, 'ocr']
       );
+      
+      // Só atualizar km_atual se o histórico foi salvo com sucesso
+      await query(
+        "UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?",
+        [kmExtraido, veiculoId, userId]
+      );
     } catch (histError) {
-      // Se a tabela não existir ou erro, apenas logar (não é crítico)
-      console.warn('[AVISO] Erro ao salvar no histórico de KM:', histError.message);
+      // Se falhar ao salvar no histórico, NÃO atualizar km_atual e retornar erro
+      console.error('[ERRO CRÍTICO] Falha ao salvar no histórico de KM:', histError.message);
+      return res.status(500).json({ 
+        error: 'Erro ao salvar histórico de KM. A atualização foi cancelada para manter a integridade dos dados.' 
+      });
     }
-
-    // Atualizar KM atual do veículo
-    await query(
-      "UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?",
-      [kmExtraido, veiculoId, userId]
-    );
 
     res.json({
       sucesso: true,

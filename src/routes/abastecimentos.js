@@ -193,23 +193,26 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
     );
 
     // Atualizar km_atual do veículo e salvar no histórico se km_depois foi informado
+    // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
     if (kmDepois) {
-      // Salvar no histórico de KM
       try {
+        // Salvar no histórico de KM PRIMEIRO (garantir consistência)
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
            VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
           [veiculo_id, userId, kmDepois, 'abastecimento']
         );
-      } catch (histError) {
-        console.warn('[AVISO] Erro ao salvar KM no histórico:', histError.message);
-      }
 
-      // Atualizar km_atual do veículo
-      await query(
-        'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
-        [kmDepois, veiculo_id, userId]
-      );
+        // Só atualizar km_atual se o histórico foi salvo com sucesso
+        await query(
+          'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
+          [kmDepois, veiculo_id, userId]
+        );
+      } catch (kmError) {
+        console.error('[ERRO CRÍTICO] Falha ao salvar KM no histórico durante abastecimento:', kmError);
+        // Não bloquear o abastecimento, mas logar erro crítico
+        // O frontend também tentará atualizar via endpoint PUT /veiculos/:id/km
+      }
     }
 
     // Buscar abastecimento criado

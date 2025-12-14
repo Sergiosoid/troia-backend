@@ -156,19 +156,41 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
     }));
 
     // Adicionar KM inicial do período se não estiver no histórico
+    // IMPORTANTE: Usar apenas dados do km_historico, não veiculos.km_atual diretamente
     if (kmInicio > 0 && (kmRodados.length === 0 || parseInt(kmRodados[0].km) !== kmInicio)) {
       kmRodados.unshift({
         data: periodo.dataInicio,
         km: kmInicio,
+        origem: 'inicio_periodo',
       });
     }
 
-    // Adicionar KM atual se não estiver no histórico
-    if (veiculo.km_atual && (kmRodados.length === 0 || parseInt(kmRodados[kmRodados.length - 1].km) !== parseInt(veiculo.km_atual))) {
-      kmRodados.push({
-        data: new Date().toISOString().split('T')[0],
-        km: parseInt(veiculo.km_atual) || 0,
-      });
+    // Buscar KM mais recente do histórico (não usar veiculos.km_atual diretamente)
+    const kmMaisRecente = kmRodados.length > 0 
+      ? parseInt(kmRodados[kmRodados.length - 1].km) 
+      : kmInicio;
+    
+    // Se houver km_atual no veículo e for diferente do último do histórico, adicionar
+    // Mas apenas se realmente houver diferença (pode ser que o histórico já tenha o KM atual)
+    if (veiculo.km_atual && parseInt(veiculo.km_atual) !== kmMaisRecente) {
+      // Buscar último registro do histórico completo (não apenas do período)
+      const ultimoKmHistorico = await queryOne(
+        `SELECT km, COALESCE(data_registro, criado_em) as data_registro
+         FROM km_historico
+         WHERE veiculo_id = ?
+         ORDER BY data_registro DESC, criado_em DESC
+         LIMIT 1`,
+        [veiculoId]
+      );
+      
+      // Só adicionar se o último do histórico completo for diferente do atual
+      if (!ultimoKmHistorico || parseInt(ultimoKmHistorico.km) !== parseInt(veiculo.km_atual)) {
+        kmRodados.push({
+          data: new Date().toISOString().split('T')[0],
+          km: parseInt(veiculo.km_atual) || 0,
+          origem: 'atual',
+        });
+      }
     }
 
     // (D) DISTRIBUIÇÃO DE MANUTENÇÕES: Agrupar por tipo (apenas do proprietário atual)
