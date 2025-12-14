@@ -229,10 +229,13 @@ router.post('/:token/aceitar', authRequired, async (req, res) => {
     );
 
     // Registrar no histórico de KM (opcional, para rastreabilidade)
+    // Garantir que data_registro sempre seja preenchido
+    const { isPostgres } = await import('../database/db-adapter.js');
+    const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
     await query(
-      `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro)
-       VALUES (?, ?, ?, 'transferencia', ?)`,
-      [veiculoId, novoUsuarioId, kmAtual, hoje]
+      `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em)
+       VALUES (?, ?, ?, 'transferencia', ${timestampFunc}, ${timestampFunc})`,
+      [veiculoId, novoUsuarioId, kmAtual]
     );
 
     res.json({

@@ -1,6 +1,6 @@
 import express from 'express';
 import { authRequired, requireRole } from '../middleware/auth.js';
-import { query, queryOne, queryAll } from '../database/db-adapter.js';
+import { query, queryOne, queryAll, isPostgres } from '../database/db-adapter.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -265,9 +265,10 @@ router.put('/:id/km', authRequired, async (req, res) => {
     // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
     // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
     try {
+      const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-         VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+         VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
         [id, userId, kmNum, origemFinal]
       );
       
@@ -394,9 +395,10 @@ router.post('/:id/transferir', authRequired, async (req, res) => {
 
       // 3. Registrar KM no histórico PRIMEIRO (garantir consistência)
       try {
+        const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-           VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+           VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
           [id, novoUsuarioIdNum, kmAtualNum, 'manual']
         );
       } catch (histError) {
@@ -1050,9 +1052,10 @@ router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (r
     // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
     // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
     try {
+      const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-         VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+         VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
         [veiculoId, userId, kmExtraido, 'ocr']
       );
       

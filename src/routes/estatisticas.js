@@ -31,10 +31,16 @@ router.get('/:veiculoId', authRequired, async (req, res) => {
       return res.status(404).json({ error: 'Veículo não encontrado' });
     }
 
-    // Obter período do proprietário atual
+    // Obter período do proprietário atual (bootstrap automático se não existir)
     const periodo = await getPeriodoProprietarioAtual(veiculoId);
     if (!periodo || !periodo.dataInicio) {
-      return res.status(404).json({ error: 'Proprietário atual não encontrado' });
+      // Se não houver período após bootstrap, retornar estrutura vazia ao invés de 404
+      return res.json({
+        consumo: [],
+        gastosMensais: [],
+        kmRodados: [],
+        manutencoes: []
+      });
     }
 
     // (A) CONSUMO: Abastecimentos com cálculo de consumo (apenas do proprietário atual)

@@ -9,7 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { authRequired } from '../middleware/auth.js';
-import { query, queryOne, queryAll } from '../database/db-adapter.js';
+import { query, queryOne, queryAll, isPostgres } from '../database/db-adapter.js';
 import { extrairDadosAbastecimento } from '../services/abastecimentoOcr.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -197,9 +197,10 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
     if (kmDepois) {
       try {
         // Salvar no histórico de KM PRIMEIRO (garantir consistência)
+        const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-           VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))`,
+           VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
           [veiculo_id, userId, kmDepois, 'abastecimento']
         );
 
