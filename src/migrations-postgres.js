@@ -578,7 +578,7 @@ const addMissingColumns = async () => {
     }
 
     // Adicionar colunas em veiculos para dados mestres (mantendo compatibilidade)
-    const veiculosExists = await tableExists('veiculos');
+    // Reutilizar veiculosExists já declarado acima
     if (veiculosExists) {
       const fabricanteIdExists = await columnExists('veiculos', 'fabricante_id');
       if (!fabricanteIdExists) {
