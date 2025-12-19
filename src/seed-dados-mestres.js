@@ -45,7 +45,7 @@ const anoFim = anoAtual + 1; // Permitir até ano futuro
 
 export const seedDadosMestres = async () => {
   try {
-    console.log('🌱 Iniciando seed de dados mestres...');
+    console.log('[SEED] 🌱 Iniciando seed de dados mestres...');
 
     // Verificar se já existem fabricantes
     let countFabricantes = 0;
@@ -68,11 +68,11 @@ export const seedDadosMestres = async () => {
     }
 
     if (countFabricantes > 0) {
-      console.log('  ✓ Dados mestres já populados. Pulando seed.');
+      console.log('[SEED] ✓ Dados mestres já populados. Pulando seed.');
       return;
     }
 
-    console.log('  📦 Populando fabricantes...');
+    console.log('[SEED] 📦 Populando fabricantes...');
     const fabricantesMap = {};
 
     for (const nomeFabricante of fabricantesComuns) {
@@ -94,7 +94,7 @@ export const seedDadosMestres = async () => {
         }
         
         fabricantesMap[nomeFabricante] = fabricanteId;
-        console.log(`    ✓ ${nomeFabricante} (ID: ${fabricanteId})`);
+                    console.log(`[SEED]     ✓ ${nomeFabricante} (ID: ${fabricanteId})`);
       } catch (error) {
         // Ignorar duplicatas
         if (error.message?.includes('UNIQUE') || error.message?.includes('duplicate')) {
@@ -107,7 +107,7 @@ export const seedDadosMestres = async () => {
           );
           if (existente) {
             fabricantesMap[nomeFabricante] = existente.id;
-            console.log(`    ✓ ${nomeFabricante} já existe (ID: ${existente.id})`);
+            console.log(`[SEED]     ✓ ${nomeFabricante} já existe (ID: ${existente.id})`);
           }
         } else {
           console.error(`    ✗ Erro ao inserir ${nomeFabricante}:`, error.message);
@@ -115,7 +115,7 @@ export const seedDadosMestres = async () => {
       }
     }
 
-    console.log('  📦 Populando modelos...');
+    console.log('[SEED] 📦 Populando modelos...');
     let totalModelos = 0;
 
     for (const [fabricanteNome, modelos] of Object.entries(modelosPorFabricante)) {
@@ -152,10 +152,26 @@ export const seedDadosMestres = async () => {
     // Opcional: Popular anos_modelo para modelos específicos (se necessário)
     // Por enquanto, usamos ano_inicio e ano_fim da tabela modelos
 
-    console.log('  ✓ Seed de dados mestres concluído!');
+    console.log('[SEED] ✓ Seed de dados mestres concluído!');
   } catch (error) {
-    console.error('  ✗ Erro ao executar seed:', error);
-    // Não lançar erro - seed é opcional
+    console.error('[SEED] 🔥 ERRO AO EXECUTAR SEED');
+    console.error('[SEED] Erro:', error);
+    console.error('[SEED] Stack:', error?.stack);
+    if (error.message) {
+      console.error('[SEED] Mensagem:', error.message);
+    }
+    if (error.code) {
+      console.error('[SEED] Código:', error.code);
+    }
+    if (error.sql) {
+      console.error('[SEED] SQL:', error.sql);
+    }
+    if (error.detail) {
+      console.error('[SEED] Detalhes SQL:', error.detail);
+    }
+    // Não lançar erro - seed é opcional e não deve bloquear boot
+    // O erro será capturado em seedDadosMestresSeNecessario() no index.js
+    // Apenas logar para diagnóstico
   }
 };
 

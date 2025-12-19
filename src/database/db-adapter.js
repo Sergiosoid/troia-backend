@@ -21,32 +21,47 @@ let pgExecute = null;
 let initPgMigrations = null;
 
 export async function initDatabase() {
-  const usePostgres = !!process.env.DATABASE_URL;
+  try {
+    console.log('[DB] Iniciando conexão com banco de dados...');
+    const usePostgres = !!process.env.DATABASE_URL;
 
-  if (usePostgres) {
-    // Usar caminho absoluto baseado em import.meta.url para garantir compatibilidade com Render
-    const postgresUrl = new URL('./postgres.js', import.meta.url).href;
-    const postgres = await import(postgresUrl);
-    pgQuery = postgres.query;
-    pgQueryOne = postgres.queryOne;
-    pgQueryAll = postgres.queryAll;
-    pgExecute = postgres.execute;
-    const { initPostgres } = postgres;
-    await initPostgres();
+    if (usePostgres) {
+      console.log('[DB] Detectado DATABASE_URL, usando PostgreSQL...');
+      // Usar caminho absoluto baseado em import.meta.url para garantir compatibilidade com Render
+      const postgresUrl = new URL('./postgres.js', import.meta.url).href;
+      const postgres = await import(postgresUrl);
+      pgQuery = postgres.query;
+      pgQueryOne = postgres.queryOne;
+      pgQueryAll = postgres.queryAll;
+      pgExecute = postgres.execute;
+      const { initPostgres } = postgres;
+      await initPostgres();
 
-    // Usar caminho absoluto para migrations
-    const migrationsUrl = new URL('../migrations-postgres.js', import.meta.url).href;
-    const migrations = await import(migrationsUrl);
-    initPgMigrations = migrations.initMigrations || migrations.default;
+      // Usar caminho absoluto para migrations
+      const migrationsUrl = new URL('../migrations-postgres.js', import.meta.url).href;
+      const migrations = await import(migrationsUrl);
+      initPgMigrations = migrations.initMigrations || migrations.default;
 
-    dbAdapter = 'postgres';
-    console.log('✅ Usando PostgreSQL');
-  } else {
-    dbAdapter = 'sqlite';
-    console.log('✅ Usando SQLite (desenvolvimento)');
+      dbAdapter = 'postgres';
+      console.log('[DB] ✅ Usando PostgreSQL');
+    } else {
+      dbAdapter = 'sqlite';
+      console.log('[DB] ✅ Usando SQLite (desenvolvimento)');
+    }
+
+    return dbAdapter;
+  } catch (err) {
+    console.error('[DB] 🔥 ERRO AO INICIALIZAR BANCO DE DADOS');
+    console.error('[DB] Erro:', err);
+    console.error('[DB] Stack:', err?.stack);
+    if (err.message) {
+      console.error('[DB] Mensagem:', err.message);
+    }
+    if (err.code) {
+      console.error('[DB] Código:', err.code);
+    }
+    throw err;
   }
-
-  return dbAdapter;
 }
 
 export function getDbAdapter() {

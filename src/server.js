@@ -18,15 +18,49 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 
 // Inicializar banco e depois iniciar servidor
-startServer().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
-    logger.info(`TROIA backend server listening on port ${PORT}`);
-    logger.info(`Health check: http://localhost:${PORT}/healthz`);
-  });
-}).catch((error) => {
-  logger.error({ error }, 'Failed to start server');
-  process.exit(1);
-});
+async function boot() {
+  try {
+    console.log('[BOOT] Iniciando processo de boot...');
+    
+    await startServer();
+    console.log('[BOOT] Servidor inicializado com sucesso');
+
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server listening on port ${PORT}`);
+      console.log(`Health check: http://localhost:${PORT}/healthz`);
+      logger.info(`TROIA backend server listening on port ${PORT}`);
+      logger.info(`Health check: http://localhost:${PORT}/healthz`);
+    });
+
+    // Tratar erros não capturados do servidor
+    server.on('error', (err) => {
+      console.error('🔥 ERRO NO SERVIDOR HTTP');
+      console.error(err);
+      console.error(err?.stack);
+      process.exit(1);
+    });
+  } catch (err) {
+    console.error('🔥 ERRO FATAL NO BOOT');
+    console.error('Erro:', err);
+    console.error('Stack:', err?.stack);
+    if (err.message) {
+      console.error('Mensagem:', err.message);
+    }
+    if (err.code) {
+      console.error('Código:', err.code);
+    }
+    if (err.sql) {
+      console.error('SQL:', err.sql);
+    }
+    if (err.detail) {
+      console.error('Detalhes:', err.detail);
+    }
+    logger.error({ error: err, stack: err?.stack }, 'Failed to start server');
+    process.exit(1);
+  }
+}
+
+boot();
 
 export default server;
 

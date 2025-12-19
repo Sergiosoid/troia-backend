@@ -29,9 +29,8 @@ const columnExists = async (tableName, columnName) => {
 
 // Criar tabelas se não existirem
 const createTablesIfNotExist = async () => {
-  console.log('📋 Verificando tabelas...');
-
   try {
+    console.log('[MIGRATIONS] 📋 Verificando tabelas...');
     // Tabela usuarios
     const usuariosExists = await tableExists('usuarios');
     if (!usuariosExists) {
@@ -161,7 +160,21 @@ const createTablesIfNotExist = async () => {
     }
 
   } catch (error) {
-    console.error('  ✗ Erro ao criar tabelas:', error.message);
+    console.error('[MIGRATIONS] 🔥 ERRO AO CRIAR TABELAS');
+    console.error('[MIGRATIONS] Erro:', error);
+    console.error('[MIGRATIONS] Stack:', error?.stack);
+    if (error.message) {
+      console.error('[MIGRATIONS] Mensagem:', error.message);
+    }
+    if (error.code) {
+      console.error('[MIGRATIONS] Código:', error.code);
+    }
+    if (error.sql) {
+      console.error('[MIGRATIONS] SQL:', error.sql);
+    }
+    if (error.detail) {
+      console.error('[MIGRATIONS] Detalhes SQL:', error.detail);
+    }
     throw error;
   }
 };
@@ -724,14 +737,8 @@ const addMissingColumns = async () => {
       // Não bloquear se falhar (pode não haver dados para migrar)
     }
 
-    // Executar seed de dados mestres
-    try {
-      const { seedDadosMestres } = await import('./seed-dados-mestres.js');
-      await seedDadosMestres();
-    } catch (seedError) {
-      console.warn('  ⚠ Erro ao executar seed (pode ser normal se dados já existirem):', seedError.message);
-      // Não bloquear se falhar
-    }
+    // Seed será executado em startServer() do index.js, não aqui
+    // Removido para evitar duplicação e garantir ordem correta
 
   } catch (error) {
     console.error('  ✗ Erro ao adicionar colunas:', error.message);
@@ -744,14 +751,28 @@ const addMissingColumns = async () => {
 
 // Função principal de migração
 export const initMigrations = async () => {
-  console.log('🚀 Iniciando migrações do banco de dados PostgreSQL...');
-
   try {
+    console.log('[MIGRATIONS] Iniciando migrações do banco de dados PostgreSQL...');
+
     await createTablesIfNotExist();
     await addMissingColumns();
-    console.log('✅ Migrações concluídas com sucesso');
+    console.log('[MIGRATIONS] ✅ Migrações concluídas com sucesso');
   } catch (error) {
-    console.error('  ✗ Erro durante migrações:', error.message);
+    console.error('[MIGRATIONS] 🔥 ERRO AO EXECUTAR MIGRAÇÕES');
+    console.error('[MIGRATIONS] Erro:', error);
+    console.error('[MIGRATIONS] Stack:', error?.stack);
+    if (error.message) {
+      console.error('[MIGRATIONS] Mensagem:', error.message);
+    }
+    if (error.code) {
+      console.error('[MIGRATIONS] Código:', error.code);
+    }
+    if (error.sql) {
+      console.error('[MIGRATIONS] SQL:', error.sql);
+    }
+    if (error.detail) {
+      console.error('[MIGRATIONS] Detalhes SQL:', error.detail);
+    }
     throw error;
   }
 };

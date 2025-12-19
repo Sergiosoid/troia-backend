@@ -159,14 +159,55 @@ function validateEnvironment() {
   warnings.forEach(w => console.warn('⚠️', w));
 }
 
+// Função para executar seed de dados mestres de forma segura
+async function seedDadosMestresSeNecessario() {
+  try {
+    console.log('[BOOT] Verificando necessidade de seed...');
+    const { seedDadosMestres } = await import('./seed-dados-mestres.js');
+    await seedDadosMestres();
+    console.log('[BOOT] Seed de dados mestres concluído');
+  } catch (err) {
+    console.error('[BOOT] Erro ao executar seed de dados mestres:');
+    console.error(err);
+    console.error(err?.stack);
+    // Não bloquear boot se seed falhar
+    console.warn('[BOOT] Continuando boot mesmo com erro no seed');
+  }
+}
+
 // Função responsável por inicializar banco e migrações
 export async function startServer() {
-  validateEnvironment();
+  try {
+    console.log('[BOOT] Iniciando servidor...');
+    
+    validateEnvironment();
+    console.log('[BOOT] Variáveis de ambiente validadas');
 
-  await initDatabase();
-  await initMigrations();
+    console.log('[BOOT] Conectando ao banco de dados...');
+    await initDatabase();
+    console.log('[BOOT] Banco conectado');
 
-  console.log('✅ Banco e migrações inicializados.');
+    console.log('[BOOT] Executando migrações...');
+    await initMigrations();
+    console.log('[BOOT] Migrações executadas');
+
+    console.log('[BOOT] Executando seed de dados mestres...');
+    await seedDadosMestresSeNecessario();
+    console.log('[BOOT] Seed concluído');
+
+    console.log('[BOOT] ✅ Inicialização completa');
+  } catch (err) {
+    console.error('🔥 ERRO FATAL NO BOOT');
+    console.error('Erro:', err);
+    console.error('Stack:', err?.stack);
+    if (err.message) {
+      console.error('Mensagem:', err.message);
+    }
+    if (err.code) {
+      console.error('Código:', err.code);
+    }
+    throw err; // Re-throw para que server.js possa capturar
+  }
 }
 
 // Exportar o app para uso no server.js
