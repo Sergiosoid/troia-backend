@@ -1,4 +1,4 @@
-import { query, queryOne } from './database/postgres.js';
+import { query, queryOne, queryAll } from './database/postgres.js';
 
 // Função auxiliar para verificar se uma tabela existe
 const tableExists = async (tableName) => {
@@ -614,6 +614,44 @@ const addMissingColumns = async () => {
         await query('ALTER TABLE veiculos ADD COLUMN origem_dados VARCHAR(20) DEFAULT \'manual\'');
         console.log('  ✓ Coluna origem_dados adicionada');
       }
+
+      const documentoUrlExists = await columnExists('veiculos', 'documento_url');
+      if (!documentoUrlExists) {
+        console.log('  ✓ Adicionando coluna documento_url em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN documento_url TEXT');
+        console.log('  ✓ Coluna documento_url adicionada');
+      }
+
+      const documentoPendenteOcrExists = await columnExists('veiculos', 'documento_pendente_ocr');
+      if (!documentoPendenteOcrExists) {
+        console.log('  ✓ Adicionando coluna documento_pendente_ocr em veiculos...');
+        await query('ALTER TABLE veiculos ADD COLUMN documento_pendente_ocr BOOLEAN DEFAULT false');
+        console.log('  ✓ Coluna documento_pendente_ocr adicionada');
+      }
+    }
+
+    // Adicionar tipo_equipamento em fabricantes
+    const fabricantesExistsForTipo = await tableExists('fabricantes');
+    if (fabricantesExistsForTipo) {
+      const tipoEquipamentoFabricantesExists = await columnExists('fabricantes', 'tipo_equipamento');
+      if (!tipoEquipamentoFabricantesExists) {
+        console.log('  ✓ Adicionando coluna tipo_equipamento em fabricantes...');
+        await query('ALTER TABLE fabricantes ADD COLUMN tipo_equipamento TEXT');
+        await query('CREATE INDEX IF NOT EXISTS idx_fabricantes_tipo_equipamento ON fabricantes(tipo_equipamento)');
+        console.log('  ✓ Coluna tipo_equipamento adicionada em fabricantes');
+      }
+    }
+
+    // Adicionar tipo_equipamento em modelos
+    const modelosExistsForTipo = await tableExists('modelos');
+    if (modelosExistsForTipo) {
+      const tipoEquipamentoModelosExists = await columnExists('modelos', 'tipo_equipamento');
+      if (!tipoEquipamentoModelosExists) {
+        console.log('  ✓ Adicionando coluna tipo_equipamento em modelos...');
+        await query('ALTER TABLE modelos ADD COLUMN tipo_equipamento TEXT');
+        await query('CREATE INDEX IF NOT EXISTS idx_modelos_tipo_equipamento ON modelos(tipo_equipamento)');
+        console.log('  ✓ Coluna tipo_equipamento adicionada em modelos');
+      }
     }
 
     // Migração de dados legados: corrigir proprietarios_historico com dados incompletos
@@ -749,6 +787,144 @@ const addMissingColumns = async () => {
   }
 };
 
+// Função de backfill para tipo_equipamento (seguro - não sobrescreve dados existentes)
+const backfillTipoEquipamento = async () => {
+  try {
+    console.log('[MIGRATIONS] 🔄 Executando backfill de tipo_equipamento...');
+    
+    // Mapeamento conhecido de fabricantes para tipos
+    const fabricantesConhecidos = {
+      // Carros
+      'Fiat': 'carro',
+      'Volkswagen': 'carro',
+      'VW': 'carro',
+      'Ford': 'carro',
+      'Chevrolet': 'carro',
+      'GM': 'carro',
+      'Toyota': 'carro',
+      'Honda': 'carro',
+      'Nissan': 'carro',
+      'Hyundai': 'carro',
+      'Renault': 'carro',
+      'Peugeot': 'carro',
+      'Citroën': 'carro',
+      'Citroen': 'carro',
+      'Jeep': 'carro',
+      'Mitsubishi': 'carro',
+      'Subaru': 'carro',
+      'Mazda': 'carro',
+      'Suzuki': 'carro',
+      'Kia': 'carro',
+      'Chery': 'carro',
+      'Great Wall': 'carro',
+      'JAC': 'carro',
+      'BYD': 'carro',
+      'Troller': 'carro',
+      'RAM': 'carro',
+      // Motos
+      'Yamaha': 'moto',
+      'Kawasaki': 'moto',
+      'Harley-Davidson': 'moto',
+      'Harley Davidson': 'moto',
+      'Ducati': 'moto',
+      'Triumph': 'moto',
+      'KTM': 'moto',
+      'Bajaj': 'moto',
+      'Shineray': 'moto',
+      'Dafra': 'moto',
+      // Caminhões
+      'Volvo': 'caminhao',
+      'Scania': 'caminhao',
+      'Mercedes-Benz': 'caminhao',
+      'Mercedes Benz': 'caminhao',
+      'Mercedes': 'caminhao',
+      'MAN': 'caminhao',
+      'Iveco': 'caminhao',
+      'DAF': 'caminhao',
+      'Volvo Caminhões': 'caminhao',
+      'Volvo Caminhoes': 'caminhao',
+      // Ônibus
+      'Marcopolo': 'onibus',
+      // Barcos
+      'Mercury': 'barco',
+      'Evinrude': 'barco',
+      'Johnson': 'barco',
+      // Máquinas Agrícolas
+      'John Deere': 'maquina_agricola',
+      'Case': 'maquina_agricola',
+      'New Holland': 'maquina_agricola',
+      'Massey Ferguson': 'maquina_agricola',
+      'Valtra': 'maquina_agricola',
+      'Agrale': 'maquina_agricola',
+      // Máquinas Industriais
+      'Caterpillar': 'maquina_industrial',
+      'CAT': 'maquina_industrial',
+      'Komatsu': 'maquina_industrial',
+      'Liebherr': 'maquina_industrial',
+      'JCB': 'maquina_industrial',
+    };
+
+    // Backfill fabricantes
+    const fabricantes = await queryAll('SELECT id, nome, tipo_equipamento FROM fabricantes WHERE tipo_equipamento IS NULL');
+    if (fabricantes && fabricantes.length > 0) {
+      console.log(`  📋 Encontrados ${fabricantes.length} fabricantes sem tipo_equipamento`);
+      let atualizados = 0;
+      for (const fabricante of fabricantes) {
+        const tipoConhecido = fabricantesConhecidos[fabricante.nome];
+        if (tipoConhecido) {
+          await query(
+            'UPDATE fabricantes SET tipo_equipamento = $1 WHERE id = $2',
+            [tipoConhecido, fabricante.id]
+          );
+          atualizados++;
+        } else {
+          // Se não for conhecido, marcar como 'outro'
+          await query(
+            'UPDATE fabricantes SET tipo_equipamento = $1 WHERE id = $2',
+            ['outro', fabricante.id]
+          );
+          atualizados++;
+        }
+      }
+      console.log(`  ✓ ${atualizados} fabricantes atualizados`);
+    }
+
+    // Backfill modelos (herdar tipo do fabricante)
+    const modelos = await queryAll('SELECT id, fabricante_id, tipo_equipamento FROM modelos WHERE tipo_equipamento IS NULL');
+    if (modelos && modelos.length > 0) {
+      console.log(`  📋 Encontrados ${modelos.length} modelos sem tipo_equipamento`);
+      let atualizados = 0;
+      for (const modelo of modelos) {
+        // Buscar tipo do fabricante
+        const fabricante = await queryOne(
+          'SELECT tipo_equipamento FROM fabricantes WHERE id = $1',
+          [modelo.fabricante_id]
+        );
+        if (fabricante && fabricante.tipo_equipamento) {
+          await query(
+            'UPDATE modelos SET tipo_equipamento = $1 WHERE id = $2',
+            [fabricante.tipo_equipamento, modelo.id]
+          );
+          atualizados++;
+        } else {
+          // Se fabricante não tiver tipo, marcar como 'outro'
+          await query(
+            'UPDATE modelos SET tipo_equipamento = $1 WHERE id = $2',
+            ['outro', modelo.id]
+          );
+          atualizados++;
+        }
+      }
+      console.log(`  ✓ ${atualizados} modelos atualizados`);
+    }
+
+    console.log('[MIGRATIONS] ✅ Backfill de tipo_equipamento concluído');
+  } catch (error) {
+    console.error('[MIGRATIONS] ⚠️ Erro no backfill de tipo_equipamento (não crítico):', error);
+    // Não lançar erro - backfill é opcional
+  }
+};
+
 // Função principal de migração
 export const initMigrations = async () => {
   try {
@@ -756,6 +932,7 @@ export const initMigrations = async () => {
 
     await createTablesIfNotExist();
     await addMissingColumns();
+    await backfillTipoEquipamento();
     console.log('[MIGRATIONS] ✅ Migrações concluídas com sucesso');
   } catch (error) {
     console.error('[MIGRATIONS] 🔥 ERRO AO EXECUTAR MIGRAÇÕES');

@@ -135,12 +135,87 @@ router.post('/', authRequired, async (req, res) => {
       });
     }
 
+    // Validações de tipo_equipamento (OBRIGATÓRIAS)
+    if (!tipo_veiculo) {
+      return res.status(400).json({ 
+        error: 'Tipo de equipamento é obrigatório',
+        code: 'TIPO_EQUIPAMENTO_OBRIGATORIO'
+      });
+    }
+
+    // Validar tipo_equipamento válido
+    const { isTipoValido } = await import('../utils/tipoEquipamento.js');
+    if (!isTipoValido(tipo_veiculo)) {
+      return res.status(400).json({ 
+        error: 'Tipo de equipamento inválido',
+        code: 'TIPO_EQUIPAMENTO_INVALIDO'
+      });
+    }
+
+    // Se usar dados mestres, validar compatibilidade de tipo
+    if (fabricante_id) {
+      const fabricante = await queryOne(
+        'SELECT id, nome, tipo_equipamento FROM fabricantes WHERE id = $1',
+        [fabricante_id]
+      );
+      
+      if (!fabricante) {
+        return res.status(400).json({ 
+          error: 'Fabricante não encontrado',
+          code: 'FABRICANTE_NAO_ENCONTRADO'
+        });
+      }
+      
+      // Validar compatibilidade: fabricante deve ter o tipo informado
+      if (fabricante.tipo_equipamento && fabricante.tipo_equipamento !== tipo_veiculo) {
+        return res.status(400).json({ 
+          error: 'Fabricante incompatível com o tipo de equipamento informado',
+          fabricante_tipo: fabricante.tipo_equipamento,
+          tipo_solicitado: tipo_veiculo,
+          code: 'FABRICANTE_INCOMPATIVEL'
+        });
+      }
+    }
+
+    // Se usar dados mestres, validar compatibilidade de modelo
+    if (modelo_id) {
+      const modelo = await queryOne(
+        'SELECT id, nome, tipo_equipamento, fabricante_id FROM modelos WHERE id = $1',
+        [modelo_id]
+      );
+      
+      if (!modelo) {
+        return res.status(400).json({ 
+          error: 'Modelo não encontrado',
+          code: 'MODELO_NAO_ENCONTRADO'
+        });
+      }
+      
+      // Validar compatibilidade: modelo deve ter o tipo informado
+      if (modelo.tipo_equipamento && modelo.tipo_equipamento !== tipo_veiculo) {
+        return res.status(400).json({ 
+          error: 'Modelo incompatível com o tipo de equipamento informado',
+          modelo_tipo: modelo.tipo_equipamento,
+          tipo_solicitado: tipo_veiculo,
+          code: 'MODELO_INCOMPATIVEL'
+        });
+      }
+      
+      // Validar que modelo pertence ao fabricante (se ambos foram informados)
+      if (fabricante_id && modelo.fabricante_id !== fabricante_id) {
+        return res.status(400).json({ 
+          error: 'Modelo não pertence ao fabricante informado',
+          code: 'MODELO_FABRICANTE_INCOMPATIVEL'
+        });
+      }
+    }
+
     // Verificar unicidade por PLACA (se fornecido)
     if (placa && placa.trim()) {
       const placaLimpa = placa.trim().toUpperCase();
       
       const veiculoPorPlaca = await queryOne(
-        'SELECT id, usuario_id FROM veiculos WHERE placa = ?',
+        'SELECT id, usuario_id FROM veiculos WHERE placa = $1',
         [placaLimpa]
       );
 
@@ -162,7 +237,7 @@ router.post('/', authRequired, async (req, res) => {
       const renavamLimpo = renavam.trim();
       
       const veiculoPorRenavam = await queryOne(
-        'SELECT id, usuario_id FROM veiculos WHERE renavam = ?',
+        'SELECT id, usuario_id FROM veiculos WHERE renavam = $1',
         [renavamLimpo]
       );
 
@@ -184,7 +259,7 @@ router.post('/', authRequired, async (req, res) => {
       try {
         const chassiLimpo = chassiBody.trim().toUpperCase();
         const veiculoPorChassi = await queryOne(
-          'SELECT id, usuario_id FROM veiculos WHERE chassi = ?',
+          'SELECT id, usuario_id FROM veiculos WHERE chassi = $1',
           [chassiLimpo]
         );
 
@@ -209,7 +284,7 @@ router.post('/', authRequired, async (req, res) => {
 
     // Buscar dados do usuário para nome do proprietário
     const usuario = await queryOne(
-      'SELECT nome, email FROM usuarios WHERE id = ?',
+      'SELECT nome, email FROM usuarios WHERE id = $1',
       [req.userId]
     );
     const nomeProprietario = usuario?.nome || usuario?.email || 'Proprietário';
