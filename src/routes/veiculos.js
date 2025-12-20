@@ -738,38 +738,21 @@ router.put('/:id/km', authRequired, async (req, res) => {
       return res.status(403).json({ error: 'Veículo não encontrado ou não pertence ao usuário' });
     }
 
-    // Validar que existe proprietário atual válido
-    // Aceitar data_inicio/km_inicio OU data_aquisicao/km_aquisicao (compatibilidade)
-    const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
-    const proprietarioAtual = await getProprietarioAtual(id);
+    // Validar que existe histórico inicial válido
+    // Se existe pelo menos um registro no histórico, o período é válido
+    const historicoInicial = await queryOne(
+      `SELECT id 
+       FROM km_historico 
+       WHERE veiculo_id = ? 
+       ORDER BY data_registro ASC, criado_em ASC 
+       LIMIT 1`,
+      [id]
+    );
     
-    if (!proprietarioAtual) {
-      console.error('[PUT /veiculos/:id/km] Veículo sem proprietário atual:', id);
+    if (!historicoInicial) {
+      console.error('[PUT /veiculos/:id/km] Veículo sem histórico inicial:', id);
       return res.status(400).json({ 
-        error: 'Não é possível atualizar KM. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
-        code: 'PERIODO_POSSE_INVALIDO'
-      });
-    }
-    
-    // Verificar se tem data e KM válidos (aceitar data_inicio/km_inicio OU data_aquisicao/km_aquisicao)
-    const temData = proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao;
-    const temKm = (proprietarioAtual.km_inicio !== null && proprietarioAtual.km_inicio !== undefined) ||
-                  (proprietarioAtual.km_aquisicao !== null && proprietarioAtual.km_aquisicao !== undefined);
-    
-    if (!temData || !temKm) {
-      console.error('[PUT /veiculos/:id/km] Período de posse incompleto:', {
-        veiculoId: id,
-        temData,
-        temKm,
-        proprietarioAtual: {
-          data_inicio: proprietarioAtual.data_inicio,
-          data_aquisicao: proprietarioAtual.data_aquisicao,
-          km_inicio: proprietarioAtual.km_inicio,
-          km_aquisicao: proprietarioAtual.km_aquisicao
-        }
-      });
-      return res.status(400).json({ 
-        error: 'Não é possível atualizar KM. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
+        error: 'Não é possível atualizar o histórico porque o veículo não possui registros iniciais.',
         code: 'PERIODO_POSSE_INVALIDO'
       });
     }
