@@ -477,10 +477,18 @@ router.post('/', authRequired, async (req, res) => {
     // e se houver valor inicial válido
     if (metrica !== 'configuravel' && valorInicialParaHistorico !== null) {
       try {
+        // Determinar fonte baseado na origem_posse
+        let fonteHistorico = 'aquisicao'; // padrão para usado
+        if (origem_posse === 'zero_km') {
+          fonteHistorico = 'fabrica';
+        } else if (origem_posse === 'usado') {
+          fonteHistorico = 'aquisicao';
+        }
+        
         await query(
-          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-           VALUES (?, ?, ?, 'inicio_posse', ?, ${timestampFunc})`,
-          [id, req.userId, valorInicialParaHistorico, data_aquisicao]
+          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
+           VALUES (?, ?, ?, 'inicio_posse', ?, ?, ${timestampFunc})`,
+          [id, req.userId, valorInicialParaHistorico, data_aquisicao, fonteHistorico]
         );
       } catch (kmError) {
         // Se falhar ao criar histórico, reverter criação do veículo e histórico de proprietário
@@ -770,13 +778,17 @@ router.put('/:id/km', authRequired, async (req, res) => {
 
     // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
     // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
-    // IMPORTANTE: origem nunca pode ser NULL ou vazio
+    // IMPORTANTE: origem e fonte nunca podem ser NULL ou vazio
     try {
       const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+      // Garantir que fonte sempre tenha um valor válido
+      const origemFinalValue = origemFinal || 'manual';
+      const fonteHistorico = origemFinalValue === 'ocr' ? 'ocr' : (origemFinalValue === 'abastecimento' ? 'abastecimento' : 'usuario');
+      
       await query(
-        `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-         VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
-        [id, userId, kmNum, origemFinal || 'manual']
+        `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
+         VALUES (?, ?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
+        [id, userId, kmNum, origemFinalValue, fonteHistorico]
       );
       
       // Só atualizar km_atual se o histórico foi salvo com sucesso
@@ -918,10 +930,13 @@ router.post('/:id/transferir', authRequired, async (req, res) => {
       // 3. Registrar KM no histórico PRIMEIRO (garantir consistência)
       try {
         const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+        // Fonte para transferência
+        const fonteHistorico = 'transferencia';
+        
         await query(
-          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-           VALUES (?, ?, ?, 'transferencia', ${timestampFunc}, ${timestampFunc})`,
-          [id, novoUsuarioIdNum, kmAtualNum]
+          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
+           VALUES (?, ?, ?, 'transferencia', ?, ${timestampFunc}, ${timestampFunc})`,
+          [id, novoUsuarioIdNum, kmAtualNum, fonteHistorico]
         );
       } catch (histError) {
         // Se falhar ao salvar no histórico, não continuar com a transferência
@@ -1611,13 +1626,16 @@ router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (r
 
     // GARANTIA DE CONSISTÊNCIA: Sempre salvar no histórico ANTES de atualizar veiculos.km_atual
     // Se falhar salvar no histórico, NÃO atualizar km_atual (garantir integridade)
-    // IMPORTANTE: origem nunca pode ser NULL ou vazio
+    // IMPORTANTE: origem e fonte nunca podem ser NULL ou vazio
     try {
       const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+      // Fonte para OCR
+      const fonteHistorico = 'ocr';
+      
       await query(
-        `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-         VALUES (?, ?, ?, 'ocr', ${timestampFunc}, ${timestampFunc})`,
-        [veiculoId, userId, kmExtraido]
+        `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
+         VALUES (?, ?, ?, 'ocr', ?, ${timestampFunc}, ${timestampFunc})`,
+        [veiculoId, userId, kmExtraido, fonteHistorico]
       );
       
       // Só atualizar km_atual se o histórico foi salvo com sucesso
