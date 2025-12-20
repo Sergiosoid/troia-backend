@@ -493,7 +493,7 @@ router.post('/', authRequired, async (req, res) => {
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
            VALUES (?, ?, ?, 'inicio_posse', ?, ?, ${timestampFunc})`,
-          [id, req.userId, valorInicialParaHistorico, data_aquisicao, fonteHistorico]
+          [id, req.userId, valorInicialParaHistorico, fonteHistorico, data_aquisicao]
         );
       } catch (kmError) {
         // Se falhar ao criar histórico, reverter criação do veículo e histórico de proprietário
