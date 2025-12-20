@@ -58,7 +58,9 @@ router.post('/', authRequired, async (req, res) => {
       modelo_id,
       ano_modelo,
       dados_nao_padronizados,
-      origem_dados // 'manual' | 'ocr'
+      origem_dados, // 'manual' | 'ocr'
+      documento_url, // URL do documento (PDF/foto)
+      documento_pendente_ocr // Flag indicando se OCR está pendente
     } = req.body;
 
     // Validações obrigatórias básicas
@@ -279,6 +281,18 @@ router.post('/', authRequired, async (req, res) => {
     if (tipo_veiculo) {
       campos.push('tipo_veiculo');
       valores.push(tipo_veiculo);
+    }
+    if (origem_dados) {
+      campos.push('origem_dados');
+      valores.push(origem_dados);
+    }
+    if (documento_url) {
+      campos.push('documento_url');
+      valores.push(documento_url);
+    }
+    if (documento_pendente_ocr !== undefined) {
+      campos.push('documento_pendente_ocr');
+      valores.push(documento_pendente_ocr);
     }
     
     // Construir query
