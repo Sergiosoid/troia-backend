@@ -230,10 +230,18 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
       try {
         // Salvar no histórico de KM PRIMEIRO (garantir consistência)
         const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
+        // Fonte para abastecimento
+        const fonteHistorico = 'abastecimento';
+        
+        // DEFESA ABSOLUTA: garantir que fonte nunca seja null ou undefined
+        if (!fonteHistorico || fonteHistorico.trim() === '') {
+          throw new Error('fonteHistorico não definida no abastecimento');
+        }
+        
         await query(
-          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, data_registro, criado_em) 
-           VALUES (?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
-          [veiculo_id, userId, kmDepois, 'abastecimento']
+          `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
+           VALUES (?, ?, ?, ?, ?, ${timestampFunc}, ${timestampFunc})`,
+          [veiculo_id, userId, kmDepois, 'abastecimento', fonteHistorico]
         );
 
         // Só atualizar km_atual se o histórico foi salvo com sucesso

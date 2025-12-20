@@ -485,6 +485,11 @@ router.post('/', authRequired, async (req, res) => {
           fonteHistorico = 'aquisicao';
         }
         
+        // DEFESA ABSOLUTA: garantir que fonte nunca seja null ou undefined
+        if (!fonteHistorico || fonteHistorico.trim() === '') {
+          throw new Error('fonteHistorico não definida no cadastro inicial');
+        }
+        
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
            VALUES (?, ?, ?, 'inicio_posse', ?, ?, ${timestampFunc})`,
@@ -783,7 +788,19 @@ router.put('/:id/km', authRequired, async (req, res) => {
       const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
       // Garantir que fonte sempre tenha um valor válido
       const origemFinalValue = origemFinal || 'manual';
-      const fonteHistorico = origemFinalValue === 'ocr' ? 'ocr' : (origemFinalValue === 'abastecimento' ? 'abastecimento' : 'usuario');
+      let fonteHistorico = 'usuario'; // padrão seguro
+      if (origemFinalValue === 'ocr') {
+        fonteHistorico = 'ocr';
+      } else if (origemFinalValue === 'abastecimento') {
+        fonteHistorico = 'abastecimento';
+      } else {
+        fonteHistorico = 'usuario';
+      }
+      
+      // DEFESA ABSOLUTA: garantir que fonte nunca seja null ou undefined
+      if (!fonteHistorico || fonteHistorico.trim() === '') {
+        throw new Error('fonteHistorico não definida na atualização de KM');
+      }
       
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
@@ -932,6 +949,11 @@ router.post('/:id/transferir', authRequired, async (req, res) => {
         const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
         // Fonte para transferência
         const fonteHistorico = 'transferencia';
+        
+        // DEFESA ABSOLUTA: garantir que fonte nunca seja null ou undefined
+        if (!fonteHistorico || fonteHistorico.trim() === '') {
+          throw new Error('fonteHistorico não definida na transferência');
+        }
         
         await query(
           `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
@@ -1631,6 +1653,11 @@ router.post('/:id/atualizar-km', authRequired, upload.single('painel'), async (r
       const timestampFunc = isPostgres() ? 'CURRENT_TIMESTAMP' : "datetime('now')";
       // Fonte para OCR
       const fonteHistorico = 'ocr';
+      
+      // DEFESA ABSOLUTA: garantir que fonte nunca seja null ou undefined
+      if (!fonteHistorico || fonteHistorico.trim() === '') {
+        throw new Error('fonteHistorico não definida no OCR');
+      }
       
       await query(
         `INSERT INTO km_historico (veiculo_id, usuario_id, km, origem, fonte, data_registro, criado_em) 
