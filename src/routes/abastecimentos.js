@@ -111,38 +111,6 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
       data
     } = req.body;
     
-    // Validar que existe proprietário atual válido
-    // Aceitar data_inicio/km_inicio OU data_aquisicao/km_aquisicao (compatibilidade)
-    if (veiculo_id) {
-      const { getProprietarioAtual } = await import('../utils/proprietarioAtual.js');
-      const proprietarioAtual = await getProprietarioAtual(parseInt(veiculo_id));
-      
-      if (!proprietarioAtual) {
-        console.error('[POST /abastecimentos] Veículo sem proprietário atual:', veiculo_id);
-        return res.status(400).json({ 
-          error: 'Não é possível cadastrar abastecimento. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
-          code: 'PERIODO_POSSE_INVALIDO'
-        });
-      }
-      
-      // Verificar se tem data e KM válidos (aceitar data_inicio/km_inicio OU data_aquisicao/km_aquisicao)
-      const temData = proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao;
-      const temKm = (proprietarioAtual.km_inicio !== null && proprietarioAtual.km_inicio !== undefined) ||
-                    (proprietarioAtual.km_aquisicao !== null && proprietarioAtual.km_aquisicao !== undefined);
-      
-      if (!temData || !temKm) {
-        console.error('[POST /abastecimentos] Período de posse incompleto:', {
-          veiculoId: veiculo_id,
-          temData,
-          temKm
-        });
-        return res.status(400).json({ 
-          error: 'Não é possível cadastrar abastecimento. O veículo não possui um período de posse válido. Por favor, edite o veículo e configure a data de aquisição e KM inicial.',
-          code: 'PERIODO_POSSE_INVALIDO'
-        });
-      }
-    }
-
     // Validações obrigatórias
     if (!veiculo_id) {
       return res.status(400).json({ error: 'veiculo_id é obrigatório' });
@@ -150,7 +118,7 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
 
     // Verificar se veículo pertence ao usuário
     const veiculo = await queryOne(
-      'SELECT id, km_atual FROM veiculos WHERE id = ? AND usuario_id = ?',
+      'SELECT id FROM veiculos WHERE id = ? AND usuario_id = ?',
       [veiculo_id, userId]
     );
 
@@ -158,17 +126,50 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
       return res.status(404).json({ error: 'Veículo não encontrado' });
     }
 
-    // Processar KM
-    let kmAntes = km_antes ? parseInt(km_antes) : (veiculo.km_atual || null);
-    let kmDepois = km_depois ? parseInt(km_depois) : null;
+    // FONTE ÚNICA DE VERDADE: Validar que o veículo possui histórico inicial
+    const historicoExiste = await queryOne(
+      'SELECT 1 FROM km_historico WHERE veiculo_id = ? LIMIT 1',
+      [veiculo_id]
+    );
 
-    // Se km_depois não foi informado, usar km_atual do veículo
-    if (!kmDepois && veiculo.km_atual) {
-      kmDepois = veiculo.km_atual;
+    if (!historicoExiste) {
+      console.error('[POST /abastecimentos] Veículo sem histórico inicial:', veiculo_id);
+      return res.status(400).json({ 
+        error: 'Não é possível cadastrar abastecimento. O veículo não possui histórico inicial válido.',
+        code: 'HISTORICO_INICIAL_INVALIDO'
+      });
     }
 
-    // Validar KM
-    if (kmAntes && kmDepois && kmDepois < kmAntes) {
+    // Buscar último KM do histórico (fonte única de verdade)
+    const ultimoKmHistorico = await queryOne(
+      `SELECT km 
+       FROM km_historico 
+       WHERE veiculo_id = ? 
+       ORDER BY COALESCE(data_registro, criado_em) DESC, criado_em DESC 
+       LIMIT 1`,
+      [veiculo_id]
+    );
+
+    const ultimoKm = ultimoKmHistorico ? parseInt(ultimoKmHistorico.km) || 0 : 0;
+
+    // Processar KM do abastecimento
+    let kmAntes = km_antes ? parseInt(km_antes) : ultimoKm;
+    let kmDepois = km_depois ? parseInt(km_depois) : null;
+
+    // Se km_depois não foi informado, usar último KM do histórico
+    if (!kmDepois) {
+      kmDepois = ultimoKm;
+    }
+
+    // Validar KM: km_depois deve ser maior ou igual ao último KM do histórico
+    if (kmDepois < ultimoKm) {
+      return res.status(400).json({ 
+        error: `KM depois (${kmDepois}) não pode ser menor que o último KM registrado (${ultimoKm})` 
+      });
+    }
+
+    // Validar KM: km_depois deve ser maior ou igual a km_antes
+    if (kmAntes && kmDepois < kmAntes) {
       return res.status(400).json({ 
         error: 'KM depois não pode ser menor que KM antes' 
       });
