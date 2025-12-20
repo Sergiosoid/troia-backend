@@ -17,10 +17,12 @@ export async function getProprietarioAtual(veiculoId) {
     const { query, queryOne, queryAll } = await import('../database/db-adapter.js');
     
     // 1. Buscar proprietário atual existente
+    // Garantir que data_venda não seja string vazia (PostgreSQL não aceita "")
     const proprietarioAtual = await queryOne(
       `SELECT * FROM proprietarios_historico 
-       WHERE veiculo_id = ? AND (data_venda IS NULL OR data_venda = '')
-       ORDER BY data_aquisicao DESC, id DESC
+       WHERE veiculo_id = ? 
+         AND (data_venda IS NULL OR data_venda = '' OR TRIM(data_venda) = '')
+       ORDER BY COALESCE(data_inicio, data_aquisicao, criado_em) DESC, id DESC
        LIMIT 1`,
       [veiculoId]
     );
@@ -79,9 +81,14 @@ export async function getProprietarioAtual(veiculoId) {
     }
     
     // Data de aquisição: usar criado_em do veículo ou data atual
-    const dataAquisicao = veiculo.criado_em 
-      ? new Date(veiculo.criado_em).toISOString().split('T')[0]
-      : new Date().toISOString().split('T')[0];
+    // Garantir que nunca seja string vazia
+    let dataAquisicao = new Date().toISOString().split('T')[0];
+    if (veiculo.criado_em) {
+      const dataObj = new Date(veiculo.criado_em);
+      if (!isNaN(dataObj.getTime())) {
+        dataAquisicao = dataObj.toISOString().split('T')[0];
+      }
+    }
     
     // Verificar se já existe algum registro (evitar duplicados)
     const existeRegistro = await queryOne(
@@ -141,9 +148,11 @@ export async function getProprietarioAtual(veiculoId) {
       }
       
       // Buscar o registro recém-criado
+      // Garantir que data_venda não seja string vazia (PostgreSQL não aceita "")
       const novoProprietario = await queryOne(
         `SELECT * FROM proprietarios_historico 
-         WHERE veiculo_id = ? AND (data_venda IS NULL OR data_venda = '')
+         WHERE veiculo_id = ? 
+           AND (data_venda IS NULL OR data_venda = '' OR TRIM(data_venda) = '')
          ORDER BY id DESC
          LIMIT 1`,
         [veiculoId]
@@ -164,12 +173,15 @@ export async function getProprietarioAtual(veiculoId) {
 
 /**
  * Verifica se uma manutenção pertence ao período do proprietário atual
+ * FONTE ÚNICA DE VERDADE: km_historico para determinar período
  * @param {number} veiculoId - ID do veículo
  * @param {string} dataManutencao - Data da manutenção (YYYY-MM-DD)
  * @returns {Promise<boolean>} true se pertence ao proprietário atual
  */
 export async function manutencaoPertenceAoProprietarioAtual(veiculoId, dataManutencao) {
   try {
+    const { queryOne } = await import('../database/db-adapter.js');
+    
     const proprietarioAtual = await getProprietarioAtual(veiculoId);
     
     // Se não há proprietário atual, considerar como não pertencente
@@ -177,13 +189,28 @@ export async function manutencaoPertenceAoProprietarioAtual(veiculoId, dataManut
       return false;
     }
     
-    // Usar data_inicio se disponível, senão data_aquisicao (backward compatibility)
-    const dataInicioPeriodo = proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao;
+    const usuarioId = proprietarioAtual.usuario_id;
     
-    // Se não há data de início, considerar como pertencente
-    if (!dataInicioPeriodo) {
+    // FONTE ÚNICA DE VERDADE: Buscar data de início do período do histórico
+    const historicoInicio = await queryOne(
+      `SELECT MIN(COALESCE(data_registro, criado_em)) as data_inicio
+       FROM km_historico
+       WHERE veiculo_id = ? AND usuario_id = ?`,
+      [veiculoId, usuarioId]
+    );
+    
+    // Se não há histórico, considerar como pertencente (fallback seguro)
+    if (!historicoInicio || !historicoInicio.data_inicio) {
       return true;
     }
+    
+    // Garantir que data seja válida (não string vazia)
+    const dataInicioObj = new Date(historicoInicio.data_inicio);
+    if (isNaN(dataInicioObj.getTime())) {
+      return true; // Fallback seguro
+    }
+    
+    const dataInicioPeriodo = dataInicioObj.toISOString().split('T')[0];
     
     // Se a manutenção é anterior ao início do período, não pertence ao proprietário atual
     if (dataManutencao < dataInicioPeriodo) {
@@ -191,8 +218,14 @@ export async function manutencaoPertenceAoProprietarioAtual(veiculoId, dataManut
     }
     
     // Se há data de venda e a manutenção é posterior, não pertence
-    if (proprietarioAtual.data_venda && dataManutencao > proprietarioAtual.data_venda) {
-      return false;
+    if (proprietarioAtual.data_venda) {
+      const dataVendaObj = new Date(proprietarioAtual.data_venda);
+      if (!isNaN(dataVendaObj.getTime())) {
+        const dataVenda = dataVendaObj.toISOString().split('T')[0];
+        if (dataManutencao > dataVenda) {
+          return false;
+        }
+      }
     }
     
     return true;
@@ -203,29 +236,106 @@ export async function manutencaoPertenceAoProprietarioAtual(veiculoId, dataManut
 }
 
 /**
- * Obtém o período do proprietário atual (data_aquisicao até data_venda ou hoje)
+ * Obtém o período do proprietário atual baseado no histórico
+ * FONTE ÚNICA DE VERDADE: km_historico
  * @param {number} veiculoId - ID do veículo
- * @returns {Promise<Object|null>} { dataInicio, dataFim } ou null
+ * @returns {Promise<Object|null>} { dataInicio, dataFim, kmInicio, kmFim } ou null
  */
 export async function getPeriodoProprietarioAtual(veiculoId) {
   try {
+    const { queryOne } = await import('../database/db-adapter.js');
+    
+    // Buscar proprietário atual para obter usuario_id (apenas para filtro)
     const proprietarioAtual = await getProprietarioAtual(veiculoId);
     
     if (!proprietarioAtual) {
+      // Sem proprietário atual: usar todo o histórico do veículo
+      const historico = await queryOne(
+        `SELECT 
+          MIN(km) as km_inicial,
+          MAX(km) as km_atual,
+          MIN(COALESCE(data_registro, criado_em)) as data_inicio,
+          MAX(COALESCE(data_registro, criado_em)) as data_fim
+         FROM km_historico
+         WHERE veiculo_id = ?`,
+        [veiculoId]
+      );
+      
+      if (!historico || (!historico.km_inicial && historico.km_inicial !== 0)) {
+        return null;
+      }
+      
+      // Garantir que datas sejam válidas (não string vazia)
+      let dataInicio = null;
+      if (historico.data_inicio) {
+        const dataObj = new Date(historico.data_inicio);
+        if (!isNaN(dataObj.getTime())) {
+          dataInicio = dataObj.toISOString().split('T')[0];
+        }
+      }
+      
+      let dataFim = new Date().toISOString().split('T')[0];
+      if (historico.data_fim) {
+        const dataObj = new Date(historico.data_fim);
+        if (!isNaN(dataObj.getTime())) {
+          dataFim = dataObj.toISOString().split('T')[0];
+        }
+      }
+      
+      return {
+        dataInicio: dataInicio,
+        dataFim: dataFim,
+        kmInicio: parseInt(historico.km_inicial) || 0,
+        kmFim: parseInt(historico.km_atual) || null,
+      };
+    }
+    
+    const usuarioId = proprietarioAtual.usuario_id;
+    
+    // FONTE ÚNICA DE VERDADE: Buscar período do histórico do proprietário atual
+    const historico = await queryOne(
+      `SELECT 
+        MIN(km) as km_inicial,
+        MAX(km) as km_atual,
+        MIN(COALESCE(data_registro, criado_em)) as data_inicio,
+        MAX(COALESCE(data_registro, criado_em)) as data_fim
+       FROM km_historico
+       WHERE veiculo_id = ? AND usuario_id = ?`,
+      [veiculoId, usuarioId]
+    );
+    
+    if (!historico || (!historico.km_inicial && historico.km_inicial !== 0)) {
       return null;
     }
     
-    // Usar data_inicio e km_inicio se disponíveis (novo modelo), senão data_aquisicao e km_aquisicao (backward compatibility)
-    const dataInicio = proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao || null;
-    const kmInicio = proprietarioAtual.km_inicio !== null && proprietarioAtual.km_inicio !== undefined 
-      ? proprietarioAtual.km_inicio 
-      : (proprietarioAtual.km_aquisicao || null);
+    // Garantir que datas sejam válidas (não string vazia)
+    let dataInicio = null;
+    if (historico.data_inicio) {
+      const dataObj = new Date(historico.data_inicio);
+      if (!isNaN(dataObj.getTime())) {
+        dataInicio = dataObj.toISOString().split('T')[0];
+      }
+    }
+    
+    // Data fim: usar data_venda do proprietário se existir, senão data mais recente do histórico
+    let dataFim = new Date().toISOString().split('T')[0];
+    if (proprietarioAtual.data_venda) {
+      const dataVendaObj = new Date(proprietarioAtual.data_venda);
+      if (!isNaN(dataVendaObj.getTime())) {
+        dataFim = dataVendaObj.toISOString().split('T')[0];
+      }
+    } else if (historico.data_fim) {
+      const dataObj = new Date(historico.data_fim);
+      if (!isNaN(dataObj.getTime())) {
+        dataFim = dataObj.toISOString().split('T')[0];
+      }
+    }
     
     return {
       dataInicio: dataInicio,
-      dataFim: proprietarioAtual.data_venda || new Date().toISOString().split('T')[0],
-      kmInicio: kmInicio,
-      kmFim: proprietarioAtual.km_venda || null,
+      dataFim: dataFim,
+      kmInicio: parseInt(historico.km_inicial) || 0,
+      kmFim: proprietarioAtual.km_venda ? parseInt(proprietarioAtual.km_venda) : (parseInt(historico.km_atual) || null),
     };
   } catch (error) {
     console.error('[getPeriodoProprietarioAtual] Erro:', error);
@@ -235,77 +345,117 @@ export async function getPeriodoProprietarioAtual(veiculoId) {
 
 /**
  * Obtém resumo do período do proprietário atual
+ * FONTE ÚNICA DE VERDADE: km_historico
  * @param {number} veiculoId - ID do veículo
  * @returns {Promise<Object|null>} Resumo do período ou null
  */
 export async function getResumoPeriodoProprietarioAtual(veiculoId) {
   try {
-    const { query, queryOne, queryAll } = await import('../database/db-adapter.js');
+    const { queryOne, queryAll } = await import('../database/db-adapter.js');
     
-    // Buscar veículo
-    const veiculo = await queryOne(
-      'SELECT km_atual FROM veiculos WHERE id = ?',
-      [veiculoId]
-    );
+    // Buscar proprietário atual para obter usuario_id (apenas para filtro)
+    const proprietarioAtual = await getProprietarioAtual(veiculoId);
+    const usuarioId = proprietarioAtual?.usuario_id || null;
     
-    if (!veiculo) {
-      return null;
+    // FONTE ÚNICA DE VERDADE: Buscar todos os dados do histórico
+    // Se houver proprietário atual, filtrar por usuario_id (período do proprietário atual)
+    // Se não houver, usar todo o histórico do veículo
+    let historicoQuery;
+    let historicoParams;
+    
+    if (usuarioId) {
+      // Período do proprietário atual: apenas registros deste usuário
+      historicoQuery = `
+        SELECT 
+          MIN(km) as valor_inicial,
+          MAX(km) as valor_atual,
+          MIN(COALESCE(data_registro, criado_em)) as data_inicio,
+          MAX(COALESCE(data_registro, criado_em)) as data_fim
+        FROM km_historico
+        WHERE veiculo_id = ? AND usuario_id = ?
+      `;
+      historicoParams = [veiculoId, usuarioId];
+    } else {
+      // Sem proprietário atual: usar todo o histórico do veículo
+      historicoQuery = `
+        SELECT 
+          MIN(km) as valor_inicial,
+          MAX(km) as valor_atual,
+          MIN(COALESCE(data_registro, criado_em)) as data_inicio,
+          MAX(COALESCE(data_registro, criado_em)) as data_fim
+        FROM km_historico
+        WHERE veiculo_id = ?
+      `;
+      historicoParams = [veiculoId];
     }
     
-    const kmAtual = parseInt(veiculo.km_atual) || 0;
+    const historicoResult = await queryOne(historicoQuery, historicoParams);
     
-    // Buscar proprietário atual (não bloquear se não existir)
-    const proprietarioAtual = await getProprietarioAtual(veiculoId);
-    
-    // Se não houver proprietário atual, retornar estrutura padrão
-    if (!proprietarioAtual) {
-      // Buscar KM mínimo do histórico (KM total do veículo)
-      const kmHistorico = await queryAll(
+    // Se não houver histórico, retornar estrutura padrão com zeros
+    if (!historicoResult || (historicoResult.valor_inicial === null && historicoResult.valor_inicial !== 0)) {
+      // Buscar KM total do veículo (mínimo de todo o histórico, não apenas do período)
+      const kmTotalHistorico = await queryOne(
         'SELECT MIN(km) as km_minimo FROM km_historico WHERE veiculo_id = ?',
         [veiculoId]
       );
       
-      const kmTotalVeiculo = kmHistorico && kmHistorico[0] && kmHistorico[0].km_minimo 
-        ? parseInt(kmHistorico[0].km_minimo) 
-        : kmAtual;
+      const kmTotalVeiculo = kmTotalHistorico && kmTotalHistorico.km_minimo !== null
+        ? parseInt(kmTotalHistorico.km_minimo) || 0
+        : 0;
       
       return {
         km_total_veiculo: kmTotalVeiculo,
-        km_inicio_periodo: kmAtual,
-        km_atual: kmAtual,
+        km_inicio_periodo: 0,
+        km_atual: 0,
         km_rodado_no_periodo: 0,
         data_aquisicao: null,
       };
     }
     
-    // Usar km_inicio se disponível (novo modelo), senão km_aquisicao (backward compatibility)
-    const kmInicioPeriodo = proprietarioAtual.km_inicio !== null && proprietarioAtual.km_inicio !== undefined
-      ? parseInt(proprietarioAtual.km_inicio) || 0
-      : (parseInt(proprietarioAtual.km_aquisicao) || 0);
+    // Extrair valores do histórico (fonte única de verdade)
+    const kmInicial = parseInt(historicoResult.valor_inicial) || 0;
+    const kmAtual = parseInt(historicoResult.valor_atual) || 0;
     
-    // Buscar KM mínimo do histórico (KM total do veículo)
-    const kmHistorico = await queryAll(
+    // Calcular KM rodado no período (do histórico)
+    const kmRodadoNoPeriodo = Math.max(0, kmAtual - kmInicial);
+    
+    // Buscar KM total do veículo (mínimo de todo o histórico, não apenas do período)
+    const kmTotalHistorico = await queryOne(
       'SELECT MIN(km) as km_minimo FROM km_historico WHERE veiculo_id = ?',
       [veiculoId]
     );
     
-    const kmTotalVeiculo = kmHistorico && kmHistorico[0] && kmHistorico[0].km_minimo 
-      ? parseInt(kmHistorico[0].km_minimo) 
-      : kmInicioPeriodo;
+    const kmTotalVeiculo = kmTotalHistorico && kmTotalHistorico.km_minimo !== null
+      ? parseInt(kmTotalHistorico.km_minimo) || kmInicial
+      : kmInicial;
     
-    // Calcular KM rodado no período atual
-    const kmRodadoNoPeriodo = Math.max(0, kmAtual - kmInicioPeriodo);
+    // Data de início: usar do histórico, nunca string vazia
+    let dataInicio = null;
+    if (historicoResult.data_inicio) {
+      // Garantir que data seja válida (não string vazia)
+      const dataObj = new Date(historicoResult.data_inicio);
+      if (!isNaN(dataObj.getTime())) {
+        dataInicio = dataObj.toISOString().split('T')[0];
+      }
+    }
     
     return {
       km_total_veiculo: kmTotalVeiculo,
-      km_inicio_periodo: kmInicioPeriodo,
+      km_inicio_periodo: kmInicial,
       km_atual: kmAtual,
       km_rodado_no_periodo: kmRodadoNoPeriodo,
-      data_aquisicao: proprietarioAtual.data_inicio || proprietarioAtual.data_aquisicao || null,
+      data_aquisicao: dataInicio,
     };
   } catch (error) {
     console.error('[getResumoPeriodoProprietarioAtual] Erro:', error);
-    return null;
+    // Retornar estrutura padrão ao invés de null (não quebrar frontend)
+    return {
+      km_total_veiculo: 0,
+      km_inicio_periodo: 0,
+      km_atual: 0,
+      km_rodado_no_periodo: 0,
+      data_aquisicao: null,
+    };
   }
 }
 
