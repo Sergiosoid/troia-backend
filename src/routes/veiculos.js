@@ -105,6 +105,26 @@ router.post('/', authRequired, async (req, res) => {
       });
     }
 
+    // Validações de tipo_equipamento (OBRIGATÓRIAS) - ANTES de usar metrica
+    if (!tipo_veiculo) {
+      return res.status(400).json({ 
+        error: 'Tipo de equipamento é obrigatório',
+        code: 'TIPO_EQUIPAMENTO_OBRIGATORIO'
+      });
+    }
+
+    // Validar tipo_equipamento válido e determinar métrica
+    const { isTipoValido, getMetricaPorTipo } = await import('../utils/tipoEquipamento.js');
+    if (!isTipoValido(tipo_veiculo)) {
+      return res.status(400).json({ 
+        error: 'Tipo de equipamento inválido',
+        code: 'TIPO_EQUIPAMENTO_INVALIDO'
+      });
+    }
+
+    // Determinar métrica baseada no tipo de equipamento (DECLARAR ANTES DE USAR)
+    const metrica = getMetricaPorTipo(tipo_veiculo);
+
     // Determinar valor inicial baseado na métrica
     let valorInicial = null;
     let valorInicialParaHistorico = null;
@@ -173,26 +193,6 @@ router.post('/', authRequired, async (req, res) => {
         code: 'AQUISICAO_OBRIGATORIA'
       });
     }
-
-    // Validações de tipo_equipamento (OBRIGATÓRIAS)
-    if (!tipo_veiculo) {
-      return res.status(400).json({ 
-        error: 'Tipo de equipamento é obrigatório',
-        code: 'TIPO_EQUIPAMENTO_OBRIGATORIO'
-      });
-    }
-
-    // Validar tipo_equipamento válido e determinar métrica
-    const { isTipoValido, getMetricaPorTipo } = await import('../utils/tipoEquipamento.js');
-    if (!isTipoValido(tipo_veiculo)) {
-      return res.status(400).json({ 
-        error: 'Tipo de equipamento inválido',
-        code: 'TIPO_EQUIPAMENTO_INVALIDO'
-      });
-    }
-
-    // Determinar métrica baseada no tipo de equipamento
-    const metrica = getMetricaPorTipo(tipo_veiculo);
 
     // Se usar dados mestres, validar compatibilidade de tipo
     if (fabricante_id) {
