@@ -1,5 +1,6 @@
 import express from 'express';
 import { authRequired, requireRole } from '../middleware/auth.js';
+import { ocrRateLimit } from '../middleware/ocrRateLimit.js';
 import { query, queryOne, queryAll, isPostgres } from '../database/db-adapter.js';
 import multer from 'multer';
 import path from 'path';
@@ -60,9 +61,9 @@ router.post('/', authRequired, async (req, res) => {
       modelo_id,
       ano_modelo,
       dados_nao_padronizados,
-      origem_dados, // 'manual' | 'ocr'
-      documento_url, // URL do documento (PDF/foto)
-      documento_pendente_ocr // Flag indicando se OCR está pendente
+      origem_dados, // 'manual' | 'ocr' - Rastreabilidade: origem dos dados do cadastro
+      documento_url, // URL do documento (PDF/foto) - Documento anexado pelo usuário
+      documento_pendente_ocr // Flag: indica se documento precisa de OCR (FUTURO: quando OCR local for implementado)
     } = req.body;
 
     // Validações obrigatórias básicas
@@ -399,6 +400,9 @@ router.post('/', authRequired, async (req, res) => {
       campos.push('tipo_veiculo');
       valores.push(tipo_veiculo);
     }
+    // origem_dados: Rastreabilidade da origem dos dados ('manual' | 'ocr')
+    // NOTA: Atualmente sempre 'manual' pois OCR local não está implementado
+    // Mantido para rastreabilidade futura quando OCR for implementado
     if (origem_dados) {
       campos.push('origem_dados');
       valores.push(origem_dados);
@@ -407,6 +411,9 @@ router.post('/', authRequired, async (req, res) => {
       campos.push('documento_url');
       valores.push(documento_url);
     }
+    // documento_pendente_ocr: Flag para indicar se documento precisa de OCR
+    // FUTURO: Quando OCR local for implementado, esta flag será consultada
+    // para processar documentos pendentes em background
     if (documento_pendente_ocr !== undefined) {
       campos.push('documento_pendente_ocr');
       valores.push(documento_pendente_ocr);
@@ -651,7 +658,8 @@ router.get('/totais', authRequired, async (req, res) => {
 });
 
 // OCR de documento do veículo (stub/placeholder) - DEVE VIR ANTES DE /:id
-router.post('/ocr-documento', authRequired, upload.single('imagem'), async (req, res) => {
+// Rate limiting: 10/min, 100/mês
+router.post('/ocr-documento', authRequired, ocrRateLimit('documento'), upload.single('imagem'), async (req, res) => {
   try {
     const file = req.file;
     
@@ -692,7 +700,8 @@ router.post('/ocr-documento', authRequired, upload.single('imagem'), async (req,
 });
 
 // OCR de KM (stub/placeholder) - DEVE VIR ANTES DE /:id
-router.post('/ocr-km', authRequired, upload.single('imagem'), async (req, res) => {
+// Rate limiting: 10/min, 100/mês
+router.post('/ocr-km', authRequired, ocrRateLimit('km'), upload.single('imagem'), async (req, res) => {
   try {
     // Stub: OCR de KM ainda não implementado
     // Aceita a requisição mas retorna placeholder
@@ -791,7 +800,9 @@ router.put('/:id/km', authRequired, async (req, res) => {
         [id, userId, kmNum, origemFinalValue, fonteHistorico]
       );
       
-      // Só atualizar km_atual se o histórico foi salvo com sucesso
+      // IMPORTANTE: km_atual é CACHE/LEGADO - fonte única de verdade é km_historico
+      // Atualizamos km_atual apenas para compatibilidade e performance de consultas
+      // Sempre salvar no histórico ANTES de atualizar km_atual (garantir consistência)
       await query(
         'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
         [kmNum, id, userId]

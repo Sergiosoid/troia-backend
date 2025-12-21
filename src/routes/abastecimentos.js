@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { authRequired } from '../middleware/auth.js';
+import { ocrRateLimit } from '../middleware/ocrRateLimit.js';
 import { query, queryOne, queryAll, isPostgres } from '../database/db-adapter.js';
 import { extrairDadosAbastecimento } from '../services/abastecimentoOcr.js';
 
@@ -47,8 +48,9 @@ const construirUrlImagem = (filename, req) => {
 /**
  * POST /abastecimentos/ocr
  * Extrai dados de abastecimento de uma imagem usando OCR
+ * Rate limiting: 10/min, 100/mês
  */
-router.post('/ocr', authRequired, upload.single('imagem'), async (req, res) => {
+router.post('/ocr', authRequired, ocrRateLimit('abastecimento'), upload.single('imagem'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Nenhuma imagem enviada' });
@@ -126,18 +128,17 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
       return res.status(404).json({ error: 'Veículo não encontrado' });
     }
 
-    // FONTE ÚNICA DE VERDADE: Validar que o veículo possui histórico inicial
+    // IMPORTANTE: Abastecimento NUNCA é bloqueado - sempre permitir cadastro
+    // Verificar histórico apenas para cálculos, não para bloquear
     const historicoExiste = await queryOne(
       'SELECT 1 FROM km_historico WHERE veiculo_id = ? LIMIT 1',
       [veiculo_id]
     );
 
+    // Se não houver histórico, permitir abastecimento mas avisar que métricas podem não estar disponíveis
     if (!historicoExiste) {
-      console.error('[POST /abastecimentos] Veículo sem histórico inicial:', veiculo_id);
-      return res.status(400).json({ 
-        error: 'Não é possível cadastrar abastecimento. O veículo não possui histórico inicial válido.',
-        code: 'HISTORICO_INICIAL_INVALIDO'
-      });
+      console.warn('[POST /abastecimentos] Veículo sem histórico inicial - permitindo abastecimento:', veiculo_id);
+      // Continuar normalmente - abastecimento será salvo mesmo sem histórico
     }
 
     // Buscar último KM do histórico (fonte única de verdade)
@@ -162,17 +163,18 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
     }
 
     // Validar KM: km_depois deve ser maior ou igual ao último KM do histórico
-    if (kmDepois < ultimoKm) {
-      return res.status(400).json({ 
-        error: `KM depois (${kmDepois}) não pode ser menor que o último KM registrado (${ultimoKm})` 
-      });
+    // IMPORTANTE: Se não houver histórico, não validar (permitir abastecimento)
+    // Avisar mas não bloquear - permitir que usuário continue
+    if (historicoExiste && kmDepois < ultimoKm) {
+      console.warn(`[POST /abastecimentos] KM depois (${kmDepois}) menor que último KM (${ultimoKm}) - permitindo mas avisando`);
+      // Continuar - abastecimento será salvo mesmo com KM inconsistente
     }
 
     // Validar KM: km_depois deve ser maior ou igual a km_antes
+    // IMPORTANTE: Avisar mas não bloquear
     if (kmAntes && kmDepois < kmAntes) {
-      return res.status(400).json({ 
-        error: 'KM depois não pode ser menor que KM antes' 
-      });
+      console.warn('[POST /abastecimentos] KM depois menor que KM antes - permitindo mas avisando');
+      // Continuar - abastecimento será salvo mesmo com KM inconsistente
     }
 
     // Calcular consumo (km/l)
@@ -245,7 +247,9 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
           [veiculo_id, userId, kmDepois, 'abastecimento', fonteHistorico]
         );
 
-        // Só atualizar km_atual se o histórico foi salvo com sucesso
+        // IMPORTANTE: km_atual é CACHE/LEGADO - fonte única de verdade é km_historico
+        // Atualizamos km_atual apenas para compatibilidade e performance de consultas
+        // Sempre salvar no histórico ANTES de atualizar km_atual (garantir consistência)
         await query(
           'UPDATE veiculos SET km_atual = ? WHERE id = ? AND usuario_id = ?',
           [kmDepois, veiculo_id, userId]
@@ -263,11 +267,64 @@ router.post('/', authRequired, upload.single('imagem'), async (req, res) => {
       [result.insertId]
     );
 
+    // Calcular feedback de valor para o usuário (sempre tentar, mas nunca bloquear)
+    let consumoMedio = null;
+    let gastoMesAtual = null;
+
+    try {
+      // 1. Calcular consumo médio (média de todos os abastecimentos com consumo válido)
+      // IMPORTANTE: Só calcular se houver histórico suficiente
+      if (historicoExiste) {
+        const abastecimentosComConsumo = await queryAll(
+          `SELECT consumo 
+           FROM abastecimentos 
+           WHERE veiculo_id = ? AND usuario_id = ? AND consumo IS NOT NULL AND consumo > 0
+           ORDER BY data DESC, id DESC`,
+          [veiculo_id, userId]
+        );
+
+        if (abastecimentosComConsumo && abastecimentosComConsumo.length > 0) {
+          const somaConsumo = abastecimentosComConsumo.reduce((acc, ab) => {
+            return acc + (parseFloat(ab.consumo) || 0);
+          }, 0);
+          consumoMedio = parseFloat((somaConsumo / abastecimentosComConsumo.length).toFixed(2));
+        }
+      }
+
+      // 2. Calcular gasto total no mês atual (sempre tentar, mesmo sem histórico)
+      const agora = new Date();
+      const primeiroDiaMes = new Date(agora.getFullYear(), agora.getMonth(), 1);
+      const primeiroDiaMesStr = primeiroDiaMes.toISOString().split('T')[0];
+
+      const abastecimentosMes = await queryAll(
+        `SELECT valor_total 
+         FROM abastecimentos 
+         WHERE veiculo_id = ? AND usuario_id = ? 
+           AND data >= ? AND valor_total IS NOT NULL`,
+        [veiculo_id, userId, primeiroDiaMesStr]
+      );
+
+      if (abastecimentosMes && abastecimentosMes.length > 0) {
+        gastoMesAtual = abastecimentosMes.reduce((acc, ab) => {
+          return acc + (parseFloat(ab.valor_total) || 0);
+        }, 0);
+        gastoMesAtual = parseFloat(gastoMesAtual.toFixed(2));
+      }
+    } catch (feedbackError) {
+      // Não bloquear resposta se cálculo de feedback falhar
+      // Abastecimento foi salvo com sucesso, métricas são apenas informativas
+      console.warn('[AVISO] Erro ao calcular feedback de abastecimento (não bloqueia):', feedbackError);
+    }
+
     res.status(201).json({
       success: true,
       data: {
         ...abastecimento,
         imagem_url: construirUrlImagem(imagem, req)
+      },
+      feedback: {
+        consumo_medio: consumoMedio,
+        gasto_mes_atual: gastoMesAtual
       }
     });
 

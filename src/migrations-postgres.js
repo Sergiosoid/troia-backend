@@ -357,6 +357,26 @@ const addMissingColumns = async () => {
       // Mas logar erro para investigação
     }
 
+    // Criar tabela ocr_usage para controle de rate limiting
+    const ocrUsageExists = await tableExists('ocr_usage');
+    if (!ocrUsageExists) {
+      console.log('  ✓ Criando tabela ocr_usage...');
+      await query(`
+        CREATE TABLE IF NOT EXISTS ocr_usage (
+          id SERIAL PRIMARY KEY,
+          usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+          tipo VARCHAR(50) NOT NULL DEFAULT 'abastecimento',
+          created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+      // Índices para queries de rate limiting
+      await query('CREATE INDEX IF NOT EXISTS idx_ocr_usage_usuario_created ON ocr_usage(usuario_id, created_at DESC)');
+      await query('CREATE INDEX IF NOT EXISTS idx_ocr_usage_usuario_tipo ON ocr_usage(usuario_id, tipo)');
+      console.log('  ✓ Tabela ocr_usage criada');
+    } else {
+      console.log('  ✓ Tabela ocr_usage já existe');
+    }
+
     // Criar tabela veiculo_compartilhamentos se não existir
     const compartilhamentosExists = await tableExists('veiculo_compartilhamentos');
     if (!compartilhamentosExists) {
