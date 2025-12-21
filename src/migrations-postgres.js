@@ -328,6 +328,35 @@ const addMissingColumns = async () => {
       }
     }
 
+    // Criar índices essenciais em km_historico para otimização de performance
+    // Estes índices são críticos pois km_historico é a fonte única de verdade e crescerá continuamente
+    try {
+      console.log('  📊 Criando índices essenciais em km_historico...');
+      
+      // Índice composto para queries por veículo ordenadas por data (mais comum)
+      // Usado em: listar histórico, buscar último KM, timeline
+      await query(`
+        CREATE INDEX IF NOT EXISTS idx_km_historico_veiculo_data
+        ON km_historico (veiculo_id, data_registro DESC, criado_em DESC)
+      `);
+      console.log('  ✓ Índice idx_km_historico_veiculo_data criado');
+      
+      // Índice para queries por usuário (período de posse)
+      // Usado em: resumo do período, filtros por proprietário
+      await query(`
+        CREATE INDEX IF NOT EXISTS idx_km_historico_usuario
+        ON km_historico (usuario_id)
+      `);
+      console.log('  ✓ Índice idx_km_historico_usuario criado');
+      
+      console.log('  ✓ Índices essenciais em km_historico criados com sucesso');
+    } catch (err) {
+      console.error('  ❌ Erro ao criar índices em km_historico:', err.message);
+      console.error('  Stack:', err.stack);
+      // Não bloquear migração se índices falharem (podem já existir)
+      // Mas logar erro para investigação
+    }
+
     // Criar tabela veiculo_compartilhamentos se não existir
     const compartilhamentosExists = await tableExists('veiculo_compartilhamentos');
     if (!compartilhamentosExists) {
