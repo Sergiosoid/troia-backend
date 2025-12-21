@@ -229,13 +229,24 @@ router.get('/resumo', authRequired, async (req, res) => {
     }
 
     // Retornar resumo
-    res.json({
+    const resumoFinal = {
       kmTotal,
       gasto30dias: parseFloat(gasto30dias.toFixed(2)),
       consumoMedio: parseFloat(consumoMedio),
       litrosMes: parseFloat(litrosMes.toFixed(2)),
       manutencaoProxima,
+    };
+    
+    console.log('[DIAGNÓSTICO GET /dashboard/resumo] Resumo final retornado:', JSON.stringify(resumoFinal, null, 2));
+    console.log('[DIAGNÓSTICO GET /dashboard/resumo] Detalhes:', {
+      kmTotal: { tipo: typeof kmTotal, valor: kmTotal },
+      gasto30dias: { tipo: typeof resumoFinal.gasto30dias, valor: resumoFinal.gasto30dias },
+      consumoMedio: { tipo: typeof resumoFinal.consumoMedio, valor: resumoFinal.consumoMedio },
+      litrosMes: { tipo: typeof resumoFinal.litrosMes, valor: resumoFinal.litrosMes },
+      manutencaoProxima: { tipo: typeof resumoFinal.manutencaoProxima, valor: resumoFinal.manutencaoProxima }
     });
+    
+    res.json(resumoFinal);
   } catch (error) {
     console.error('Erro ao buscar resumo do dashboard:', error);
     res.status(500).json({ error: 'Erro ao buscar resumo do dashboard' });

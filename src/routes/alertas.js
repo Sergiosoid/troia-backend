@@ -214,6 +214,15 @@ router.get('/', authRequired, async (req, res) => {
       }
     }
 
+    console.log('[DIAGNÓSTICO GET /alertas] Resultado final retornado:', JSON.stringify(resultado, null, 2));
+    console.log('[DIAGNÓSTICO GET /alertas] Detalhes:', {
+      totalVeiculos: veiculos.length,
+      veiculosComAlertas: resultado.length,
+      tipo: typeof resultado,
+      isArray: Array.isArray(resultado),
+      length: resultado.length
+    });
+    
     res.json(resultado);
   } catch (error) {
     console.error('Erro ao buscar alertas:', error);
