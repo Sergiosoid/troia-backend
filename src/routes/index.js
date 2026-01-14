@@ -8,6 +8,7 @@ import proprietariosRouter from './proprietarios.js';
 import manutencoesRouter from './manutencoes.js';
 import setupRouter from './setup.js';
 import adminRouter from './admin.js';
+import devRouter from './dev.js';
 
 const router = express.Router();
 
@@ -18,6 +19,7 @@ router.use('/veiculos', veiculosRouter);
 router.use('/proprietarios', proprietariosRouter);
 router.use('/manutencoes', manutencoesRouter);
 router.use('/admin', adminRouter);
+router.use('/dev', devRouter);
 
 // Setup route with basePath
 if (setupRouter && setupRouter.router) {
