@@ -7,6 +7,29 @@
 import { queryOne } from '../database/db-adapter.js';
 
 /**
+ * Valida e normaliza uma data
+ * Converte string vazia "" para null
+ * Valida se a data é válida
+ * @param {string|Date|null} data - Data a validar
+ * @returns {string|null} Data no formato YYYY-MM-DD ou null se inválida
+ */
+function validarData(data) {
+  if (!data || data === '' || (typeof data === 'string' && data.trim() === '')) {
+    return null;
+  }
+  
+  try {
+    const dataObj = new Date(data);
+    if (isNaN(dataObj.getTime())) {
+      return null;
+    }
+    return dataObj.toISOString().split('T')[0];
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
  * Busca o proprietário atual de um veículo
  * Se não existir, cria automaticamente um registro (bootstrap)
  * @param {number} veiculoId - ID do veículo
@@ -205,12 +228,10 @@ export async function manutencaoPertenceAoProprietarioAtual(veiculoId, dataManut
     }
     
     // Garantir que data seja válida (não string vazia)
-    const dataInicioObj = new Date(historicoInicio.data_inicio);
-    if (isNaN(dataInicioObj.getTime())) {
+    const dataInicioPeriodo = validarData(historicoInicio.data_inicio);
+    if (!dataInicioPeriodo) {
       return true; // Fallback seguro
     }
-    
-    const dataInicioPeriodo = dataInicioObj.toISOString().split('T')[0];
     
     // Se a manutenção é anterior ao início do período, não pertence ao proprietário atual
     if (dataManutencao < dataInicioPeriodo) {
@@ -218,14 +239,9 @@ export async function manutencaoPertenceAoProprietarioAtual(veiculoId, dataManut
     }
     
     // Se há data de venda e a manutenção é posterior, não pertence
-    if (proprietarioAtual.data_venda) {
-      const dataVendaObj = new Date(proprietarioAtual.data_venda);
-      if (!isNaN(dataVendaObj.getTime())) {
-        const dataVenda = dataVendaObj.toISOString().split('T')[0];
-        if (dataManutencao > dataVenda) {
-          return false;
-        }
-      }
+    const dataVenda = validarData(proprietarioAtual.data_venda);
+    if (dataVenda && dataManutencao > dataVenda) {
+      return false;
     }
     
     return true;
@@ -262,32 +278,25 @@ export async function getPeriodoProprietarioAtual(veiculoId) {
       );
       
       if (!historico || (!historico.km_inicial && historico.km_inicial !== 0)) {
-        return null;
+        // Sem histórico: retornar objeto seguro
+        return {
+          dataInicio: null,
+          dataFim: null,
+          kmInicio: 0,
+          kmFim: null,
+        };
       }
       
-      // Garantir que datas sejam válidas (não string vazia)
-      let dataInicio = null;
-      if (historico.data_inicio) {
-        const dataObj = new Date(historico.data_inicio);
-        if (!isNaN(dataObj.getTime())) {
-          dataInicio = dataObj.toISOString().split('T')[0];
-        }
-      }
-      
-      let dataFim = new Date().toISOString().split('T')[0];
-      if (historico.data_fim) {
-        const dataObj = new Date(historico.data_fim);
-        if (!isNaN(dataObj.getTime())) {
-          dataFim = dataObj.toISOString().split('T')[0];
-        }
-      }
-      
-      return {
-        dataInicio: dataInicio,
-        dataFim: dataFim,
-        kmInicio: parseInt(historico.km_inicial) || 0,
-        kmFim: parseInt(historico.km_atual) || null,
-      };
+    // Garantir que datas sejam válidas (não string vazia)
+    const dataInicio = validarData(historico.data_inicio);
+    const dataFim = validarData(historico.data_fim) || new Date().toISOString().split('T')[0];
+    
+    return {
+      dataInicio: dataInicio,
+      dataFim: dataFim,
+      kmInicio: parseInt(historico.km_inicial) || 0,
+      kmFim: parseInt(historico.km_atual) || null,
+    };
     }
     
     const usuarioId = proprietarioAtual.usuario_id;
@@ -305,30 +314,22 @@ export async function getPeriodoProprietarioAtual(veiculoId) {
     );
     
     if (!historico || (!historico.km_inicial && historico.km_inicial !== 0)) {
-      return null;
+      // Sem histórico: retornar objeto seguro
+      return {
+        dataInicio: null,
+        dataFim: null,
+        kmInicio: 0,
+        kmFim: null,
+      };
     }
     
     // Garantir que datas sejam válidas (não string vazia)
-    let dataInicio = null;
-    if (historico.data_inicio) {
-      const dataObj = new Date(historico.data_inicio);
-      if (!isNaN(dataObj.getTime())) {
-        dataInicio = dataObj.toISOString().split('T')[0];
-      }
-    }
+    const dataInicio = validarData(historico.data_inicio);
     
     // Data fim: usar data_venda do proprietário se existir, senão data mais recente do histórico
-    let dataFim = new Date().toISOString().split('T')[0];
-    if (proprietarioAtual.data_venda) {
-      const dataVendaObj = new Date(proprietarioAtual.data_venda);
-      if (!isNaN(dataVendaObj.getTime())) {
-        dataFim = dataVendaObj.toISOString().split('T')[0];
-      }
-    } else if (historico.data_fim) {
-      const dataObj = new Date(historico.data_fim);
-      if (!isNaN(dataObj.getTime())) {
-        dataFim = dataObj.toISOString().split('T')[0];
-      }
+    let dataFim = validarData(proprietarioAtual.data_venda) || validarData(historico.data_fim);
+    if (!dataFim) {
+      dataFim = new Date().toISOString().split('T')[0];
     }
     
     return {
@@ -339,7 +340,13 @@ export async function getPeriodoProprietarioAtual(veiculoId) {
     };
   } catch (error) {
     console.error('[getPeriodoProprietarioAtual] Erro:', error);
-    return null;
+    // Retornar objeto seguro ao invés de null para não quebrar queries
+    return {
+      dataInicio: null,
+      dataFim: null,
+      kmInicio: 0,
+      kmFim: null,
+    };
   }
 }
 
@@ -430,14 +437,7 @@ export async function getResumoPeriodoProprietarioAtual(veiculoId) {
       : kmInicial;
     
     // Data de início: usar do histórico, nunca string vazia
-    let dataInicio = null;
-    if (historicoResult.data_inicio) {
-      // Garantir que data seja válida (não string vazia)
-      const dataObj = new Date(historicoResult.data_inicio);
-      if (!isNaN(dataObj.getTime())) {
-        dataInicio = dataObj.toISOString().split('T')[0];
-      }
-    }
+    const dataInicio = validarData(historicoResult.data_inicio);
     
     return {
       km_total_veiculo: kmTotalVeiculo,

@@ -175,6 +175,46 @@ async function seedDadosMestresSeNecessario() {
   }
 }
 
+// Função para executar reset automático de dados operacionais (apenas no primeiro deploy)
+async function resetDataSeNecessario() {
+  // Só executa se RUN_DATA_RESET === 'true'
+  if (process.env.RUN_DATA_RESET !== 'true') {
+    return;
+  }
+
+  try {
+    console.log('[BOOT] ⚠️ RUN_DATA_RESET=true detectado - iniciando reset automático de dados operacionais...');
+    console.log('[BOOT] Este reset é executado apenas uma vez no primeiro deploy');
+    
+    const { resetOperationalData } = await import('./services/resetDataService.js');
+    
+    const result = await resetOperationalData({
+      resetUsers: false, // Nunca apagar usuários no reset automático
+      logger: (message) => {
+        console.log(`[BOOT] ${message}`);
+      },
+    });
+
+    console.log('[BOOT] ✅ Reset automático concluído com sucesso');
+    console.log(`[BOOT] Total de registros deletados: ${result.totalDeleted}`);
+    console.log('[BOOT] Resumo por tabela:', JSON.stringify(result.summary, null, 2));
+    console.log('[BOOT] ⚠️ IMPORTANTE: Remova RUN_DATA_RESET do .env após o primeiro deploy');
+    
+  } catch (err) {
+    // Erro no reset é FATAL - não continuar o boot
+    console.error('[BOOT] 🔥 ERRO FATAL: Reset automático falhou');
+    console.error('[BOOT] Erro:', err);
+    console.error('[BOOT] Stack:', err?.stack);
+    if (err.message) {
+      console.error('[BOOT] Mensagem:', err.message);
+    }
+    if (err.code) {
+      console.error('[BOOT] Código:', err.code);
+    }
+    throw err; // Re-throw para bloquear o boot
+  }
+}
+
 // Função responsável por inicializar banco e migrações
 export async function startServer() {
   try {
@@ -194,6 +234,10 @@ export async function startServer() {
     console.log('[BOOT] Executando seed de dados mestres...');
     await seedDadosMestresSeNecessario();
     console.log('[BOOT] Seed concluído');
+
+    // Reset automático de dados operacionais (apenas se RUN_DATA_RESET=true)
+    // Executa ANTES do servidor escutar a porta
+    await resetDataSeNecessario();
 
     console.log('[BOOT] ✅ Inicialização completa');
   } catch (err) {

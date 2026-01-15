@@ -6,11 +6,22 @@
  */
 
 import express from 'express';
-import { authRequired, requireRole } from '../middleware/auth.js';
+import jwt from 'jsonwebtoken';
 import { resetOperationalData } from '../services/resetDataService.js';
 import logger from '../logger.js';
 
 const router = express.Router();
+
+function sendOk(res, payload) {
+  return res.status(200).json({ success: true, ...payload });
+}
+
+function sendError(res, status, code, message) {
+  return res.status(status).json({
+    success: false,
+    error: { code, message },
+  });
+}
 
 /**
  * Middleware para verificar se o endpoint administrativo está habilitado
@@ -21,10 +32,41 @@ function requireAdminResetEnabled(req, res, next) {
       userId: req.userId,
       ip: req.ip,
     });
-    return res.status(403).json({
-      error: 'Endpoint administrativo desabilitado',
-      message: 'O reset de dados operacionais via API está desabilitado. Use o script CLI se necessário.',
-    });
+    // Importante: 404 (não 403) para "não existir" quando desabilitado
+    return sendError(res, 404, 'NOT_FOUND', 'Not found');
+  }
+  next();
+}
+
+/**
+ * Middleware JWT (local, para manter response padronizada)
+ */
+function requireJwt(req, res, next) {
+  try {
+    const header = req.headers.authorization;
+    if (!header) return sendError(res, 401, 'NO_TOKEN', 'Token de autenticação não fornecido');
+
+    const [type, token] = header.split(' ');
+    if (type !== 'Bearer' || !token) {
+      return sendError(res, 401, 'INVALID_TOKEN_FORMAT', 'Formato de token inválido. Use: Authorization: Bearer <token>');
+    }
+
+    const secret = process.env.JWT_SECRET || 'troia-default-secret';
+    const payload = jwt.verify(token, secret);
+
+    req.user = payload;
+    req.userId = payload.id || payload.userId || payload.user_id;
+    if (!req.userId) return sendError(res, 401, 'INVALID_TOKEN', 'Token inválido');
+
+    return next();
+  } catch (_err) {
+    return sendError(res, 401, 'INVALID_TOKEN', 'Token inválido ou expirado');
+  }
+}
+
+function requireAdminRole(req, res, next) {
+  if (!req.user || req.user.role !== 'admin') {
+    return sendError(res, 403, 'FORBIDDEN', 'Acesso negado');
   }
   next();
 }
@@ -44,9 +86,9 @@ function requireAdminResetEnabled(req, res, next) {
  */
 router.post(
   '/reset-operational-data',
-  authRequired,
-  requireRole('admin'),
   requireAdminResetEnabled,
+  requireJwt,
+  requireAdminRole,
   async (req, res) => {
     try {
       // Verificar confirmação explícita
@@ -56,10 +98,12 @@ router.post(
           confirm: req.body.confirm,
           ip: req.ip,
         });
-        return res.status(400).json({
-          error: 'Confirmação inválida',
-          message: 'É necessário enviar { confirm: "RESET_ALL_DATA" } no body para executar o reset.',
-        });
+        return sendError(
+          res,
+          400,
+          'INVALID_CONFIRM',
+          'É necessário enviar { "confirm": "RESET_ALL_DATA" } no body para executar o reset.'
+        );
       }
 
       logger.info('Iniciando reset de dados operacionais via endpoint administrativo', {
@@ -84,8 +128,7 @@ router.post(
       });
 
       // Retornar sucesso
-      return res.status(200).json({
-        success: true,
+      return sendOk(res, {
         message: 'Dados operacionais resetados com sucesso',
         totalDeleted: result.totalDeleted,
         summary: result.summary,
@@ -100,35 +143,39 @@ router.post(
         ip: req.ip,
       };
 
-      // Adicionar stack apenas em desenvolvimento
-      if (process.env.NODE_ENV !== 'production') {
-        errorDetails.stack = error.stack;
-      }
+      // Stack só nos logs (nunca no response)
+      errorDetails.stack = error.stack;
 
       // Verificar se é erro de SQL conhecido
       if (error.code === '22007') {
         logger.error(errorDetails, 'Erro de formato de data ao executar reset');
-        return res.status(500).json({
-          error: 'Erro de formato de data',
-          message: 'Ocorreu um erro de formato de data. A transação foi revertida automaticamente.',
-        });
+        return sendError(
+          res,
+          500,
+          'SQL_DATE_FORMAT',
+          'Ocorreu um erro interno ao resetar os dados operacionais. A transação foi revertida automaticamente.'
+        );
       }
 
       if (error.code === '42P18') {
         logger.error(errorDetails, 'Erro de parâmetro SQL ao executar reset');
-        return res.status(500).json({
-          error: 'Erro de parâmetro SQL',
-          message: 'Ocorreu um erro de parâmetro SQL. A transação foi revertida automaticamente.',
-        });
+        return sendError(
+          res,
+          500,
+          'SQL_PARAMETER',
+          'Ocorreu um erro interno ao resetar os dados operacionais. A transação foi revertida automaticamente.'
+        );
       }
 
       logger.error(errorDetails, 'Erro ao executar reset de dados operacionais');
 
       // Retornar erro genérico para não expor detalhes internos
-      return res.status(500).json({
-        error: 'Erro ao executar reset de dados',
-        message: 'Ocorreu um erro ao resetar os dados operacionais. A transação foi revertida automaticamente.',
-      });
+      return sendError(
+        res,
+        500,
+        'INTERNAL_ERROR',
+        'Ocorreu um erro interno ao resetar os dados operacionais. A transação foi revertida automaticamente.'
+      );
     }
   }
 );
