@@ -679,7 +679,7 @@ const addMissingColumns = async () => {
       }
     }
 
-    // Adicionar tipo_equipamento em fabricantes
+    // Adicionar tipo_equipamento em fabricantes e ajustar constraint
     const fabricantesExistsForTipo = await tableExists('fabricantes');
     if (fabricantesExistsForTipo) {
       const tipoEquipamentoFabricantesExists = await columnExists('fabricantes', 'tipo_equipamento');
@@ -688,6 +688,33 @@ const addMissingColumns = async () => {
         await query('ALTER TABLE fabricantes ADD COLUMN tipo_equipamento TEXT');
         await query('CREATE INDEX IF NOT EXISTS idx_fabricantes_tipo_equipamento ON fabricantes(tipo_equipamento)');
         console.log('  ✓ Coluna tipo_equipamento adicionada em fabricantes');
+      }
+      
+      // Remover constraint UNIQUE do nome e criar UNIQUE(nome, tipo_equipamento)
+      // Isso permite mesmo fabricante em múltiplos tipos
+      try {
+        // Verificar se constraint UNIQUE no nome existe
+        if (isPostgres()) {
+          const constraintExists = await queryOne(`
+            SELECT constraint_name 
+            FROM information_schema.table_constraints 
+            WHERE table_name = 'fabricantes' 
+            AND constraint_type = 'UNIQUE' 
+            AND constraint_name LIKE '%nome%'
+          `);
+          
+          if (constraintExists) {
+            console.log('  ✓ Removendo constraint UNIQUE do nome em fabricantes...');
+            await query('ALTER TABLE fabricantes DROP CONSTRAINT IF EXISTS fabricantes_nome_key');
+            await query('ALTER TABLE fabricantes DROP CONSTRAINT IF EXISTS fabricantes_nome_unique');
+            // Criar nova constraint UNIQUE(nome, tipo_equipamento)
+            await query('CREATE UNIQUE INDEX IF NOT EXISTS idx_fabricantes_nome_tipo ON fabricantes(nome, tipo_equipamento)');
+            console.log('  ✓ Constraint atualizada para UNIQUE(nome, tipo_equipamento)');
+          }
+        }
+      } catch (error) {
+        // Ignorar erro se constraint não existir ou já foi removida
+        console.log('  ⚠ Não foi possível ajustar constraint (pode já estar correta):', error.message);
       }
     }
 

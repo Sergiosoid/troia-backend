@@ -5,12 +5,43 @@
 
 import { query, queryOne, queryAll, isPostgres } from './database/db-adapter.js';
 
-const fabricantesComuns = [
-  'Fiat', 'Volkswagen', 'Chevrolet', 'Ford', 'Toyota', 'Honda',
-  'Hyundai', 'Renault', 'Nissan', 'Peugeot', 'Citroën', 'Jeep',
-  'Mitsubishi', 'Suzuki', 'Kia', 'Audi', 'BMW', 'Mercedes-Benz',
-  'Volvo', 'Land Rover', 'Jaguar', 'Porsche', 'Lexus', 'Infiniti'
-];
+// Fabricantes por tipo de equipamento
+const fabricantesPorTipo = {
+  carro: [
+    'Fiat', 'Volkswagen', 'Chevrolet', 'Ford', 'Toyota', 'Honda',
+    'Hyundai', 'Renault', 'Nissan', 'Peugeot', 'Citroën', 'Jeep',
+    'Mitsubishi', 'Suzuki', 'Kia', 'Audi', 'BMW', 'Mercedes-Benz',
+    'Volvo', 'Land Rover', 'Jaguar', 'Porsche', 'Lexus', 'Infiniti'
+  ],
+  moto: [
+    'Honda', 'Yamaha', 'Suzuki', 'Kawasaki', 'Harley-Davidson',
+    'Ducati', 'Triumph', 'BMW', 'KTM', 'Bajaj', 'Royal Enfield',
+    'Kymco', 'Vespa', 'Piaggio', 'Dafra', 'Shineray'
+  ],
+  caminhao: [
+    'Mercedes-Benz', 'Volvo', 'Scania', 'MAN', 'Iveco',
+    'DAF', 'Ford', 'Volkswagen', 'Fiat', 'Agrale', 'International'
+  ],
+  onibus: [
+    'Mercedes-Benz', 'Volvo', 'Scania', 'MAN', 'Iveco',
+    'Marcopolo', 'Caio', 'Busscar', 'Neobus', 'Comil'
+  ],
+  barco: [
+    'Yamaha', 'Mercury', 'Suzuki', 'Honda', 'Evinrude',
+    'Volvo Penta', 'Caterpillar', 'Cummins', 'Perkins'
+  ],
+  jetski: [
+    'Yamaha', 'Sea-Doo', 'Kawasaki', 'Honda', 'Polaris'
+  ],
+  maquina_agricola: [
+    'John Deere', 'Case IH', 'New Holland', 'Massey Ferguson',
+    'Valtra', 'Fendt', 'Claas', 'Kubota', 'Agrale', 'Landini'
+  ],
+  maquina_industrial: [
+    'Caterpillar', 'Komatsu', 'Volvo', 'Liebherr', 'Hitachi',
+    'JCB', 'Bobcat', 'Case', 'Deere', 'Kubota'
+  ]
+};
 
 const modelosPorFabricante = {
   'Fiat': ['Uno', 'Palio', 'Siena', 'Strada', 'Toro', 'Mobi', 'Argo', 'Cronos', 'Fiorino', 'Doblo'],
@@ -72,45 +103,90 @@ export const seedDadosMestres = async () => {
       return;
     }
 
-    console.log('[SEED] 📦 Populando fabricantes...');
+    console.log('[SEED] 📦 Populando fabricantes por tipo...');
     const fabricantesMap = {};
 
-    for (const nomeFabricante of fabricantesComuns) {
-      try {
-        // Usar query do db-adapter que já trata PostgreSQL vs SQLite
-        const result = await query(
-          isPostgres() 
-            ? 'INSERT INTO fabricantes (nome, ativo) VALUES ($1, true) RETURNING id'
-            : 'INSERT INTO fabricantes (nome, ativo) VALUES (?, true)',
-          [nomeFabricante]
-        );
+    // Popular fabricantes associados aos tipos corretos
+    // Com constraint UNIQUE(nome, tipo_equipamento), podemos ter mesmo fabricante em múltiplos tipos
+    const fabricantesProcessados = new Set();
+    
+    for (const [tipo, fabricantes] of Object.entries(fabricantesPorTipo)) {
+      for (const nomeFabricante of fabricantes) {
+        const key = `${nomeFabricante}_${tipo}`;
         
-        // Extrair ID conforme o tipo de banco
-        let fabricanteId;
-        if (isPostgres()) {
-          fabricanteId = result.rows?.[0]?.id;
-        } else {
-          fabricanteId = result.insertId;
-        }
+        // Se já processamos este fabricante neste tipo, pular
+        if (fabricantesProcessados.has(key)) continue;
+        fabricantesProcessados.add(key);
         
-        fabricantesMap[nomeFabricante] = fabricanteId;
-                    console.log(`[SEED]     ✓ ${nomeFabricante} (ID: ${fabricanteId})`);
-      } catch (error) {
-        // Ignorar duplicatas
-        if (error.message?.includes('UNIQUE') || error.message?.includes('duplicate')) {
-          // Buscar ID existente
+        try {
+          // Verificar se fabricante já existe para este tipo específico
           const existente = await queryOne(
             isPostgres() 
-              ? 'SELECT id FROM fabricantes WHERE nome = $1'
-              : 'SELECT id FROM fabricantes WHERE nome = ?',
-            [nomeFabricante]
+              ? 'SELECT id FROM fabricantes WHERE nome = $1 AND tipo_equipamento = $2'
+              : 'SELECT id FROM fabricantes WHERE nome = ? AND tipo_equipamento = ?',
+            [nomeFabricante, tipo]
           );
+
           if (existente) {
-            fabricantesMap[nomeFabricante] = existente.id;
-            console.log(`[SEED]     ✓ ${nomeFabricante} já existe (ID: ${existente.id})`);
+            // Já existe para este tipo
+            fabricantesMap[key] = existente.id;
+            console.log(`[SEED]     ✓ ${nomeFabricante} (${tipo}) já existe - ID: ${existente.id}`);
+          } else {
+            // Criar novo fabricante com tipo (ou atualizar existente sem tipo)
+            // Primeiro verificar se existe sem tipo
+            const existenteSemTipo = await queryOne(
+              isPostgres() 
+                ? 'SELECT id FROM fabricantes WHERE nome = $1 AND (tipo_equipamento IS NULL OR tipo_equipamento = $2)'
+                : 'SELECT id FROM fabricantes WHERE nome = ? AND (tipo_equipamento IS NULL OR tipo_equipamento = ?)',
+              [nomeFabricante, tipo]
+            );
+            
+            if (existenteSemTipo) {
+              // Atualizar tipo_equipamento se estiver NULL (mas só se não houver outro com mesmo nome+tipo)
+              await query(
+                isPostgres() 
+                  ? 'UPDATE fabricantes SET tipo_equipamento = $1 WHERE id = $2 AND tipo_equipamento IS NULL'
+                  : 'UPDATE fabricantes SET tipo_equipamento = ? WHERE id = ? AND tipo_equipamento IS NULL',
+                [tipo, existenteSemTipo.id]
+              );
+              fabricantesMap[key] = existenteSemTipo.id;
+              console.log(`[SEED]     ✓ ${nomeFabricante} atualizado para tipo ${tipo} - ID: ${existenteSemTipo.id}`);
+            } else {
+              // Criar novo registro
+              const result = await query(
+                isPostgres() 
+                  ? 'INSERT INTO fabricantes (nome, tipo_equipamento, ativo) VALUES ($1, $2, true) RETURNING id'
+                  : 'INSERT INTO fabricantes (nome, tipo_equipamento, ativo) VALUES (?, ?, true)',
+                [nomeFabricante, tipo]
+              );
+              
+              let fabricanteId;
+              if (isPostgres()) {
+                fabricanteId = result.rows?.[0]?.id;
+              } else {
+                fabricanteId = result.insertId;
+              }
+              
+              fabricantesMap[key] = fabricanteId;
+              console.log(`[SEED]     ✓ ${nomeFabricante} (${tipo}) - ID: ${fabricanteId}`);
+            }
           }
-        } else {
-          console.error(`    ✗ Erro ao inserir ${nomeFabricante}:`, error.message);
+        } catch (error) {
+          // Ignorar duplicatas (UNIQUE constraint)
+          if (error.message?.includes('UNIQUE') || error.message?.includes('duplicate')) {
+            // Buscar ID existente
+            const existente = await queryOne(
+              isPostgres() 
+                ? 'SELECT id FROM fabricantes WHERE nome = $1 AND tipo_equipamento = $2'
+                : 'SELECT id FROM fabricantes WHERE nome = ? AND tipo_equipamento = ?',
+              [nomeFabricante, tipo]
+            );
+            if (existente) {
+              fabricantesMap[key] = existente.id;
+            }
+          } else {
+            console.error(`    ✗ Erro ao inserir ${nomeFabricante} (${tipo}):`, error.message);
+          }
         }
       }
     }
@@ -118,8 +194,13 @@ export const seedDadosMestres = async () => {
     console.log('[SEED] 📦 Populando modelos...');
     let totalModelos = 0;
 
+    // Modelos são principalmente para carros (tipo padrão)
+    const tipoModelos = 'carro';
+
     for (const [fabricanteNome, modelos] of Object.entries(modelosPorFabricante)) {
-      const fabricanteId = fabricantesMap[fabricanteNome];
+      // Buscar fabricante do tipo 'carro' (modelos são principalmente de carros)
+      const key = `${fabricanteNome}_${tipoModelos}`;
+      const fabricanteId = fabricantesMap[key];
       if (!fabricanteId) continue;
 
       for (const nomeModelo of modelos) {

@@ -5,6 +5,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { authRequired, requireRole } from '../middleware/auth.js';
 import { query, queryOne, queryAll } from '../database/db-adapter.js';
+import { ocrRateLimit } from '../middleware/ocrRateLimit.js';
+import logger from '../logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -349,6 +351,121 @@ router.get('/buscar', authRequired, async (req, res) => {
     });
   }
 });
+
+/**
+ * POST /manutencoes/ocr
+ * Processa imagem de documento de manutenção via OCR
+ * NÃO salva manutenção - apenas extrai dados para pré-preenchimento
+ */
+router.post('/ocr', authRequired, ocrRateLimit('manutencao'), upload.single('imagem'), async (req, res) => {
+  try {
+    const file = req.file;
+    const userId = req.userId;
+
+    if (!file) {
+      return res.status(400).json({
+        error: 'Imagem é obrigatória',
+        code: 'IMAGE_REQUIRED'
+      });
+    }
+
+    // Validar tipo de arquivo
+    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      // Limpar arquivo inválido
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+      return res.status(400).json({
+        error: 'Tipo de arquivo não suportado. Use JPEG, PNG ou WebP',
+        code: 'INVALID_FILE_TYPE'
+      });
+    }
+
+    try {
+      // Importar serviço de OCR
+      const { extrairDadosManutencao } = await import('../services/ocrMaintenanceService.js');
+      
+      // Processar OCR
+      const dadosExtraidos = await extrairDadosManutencao(file.path, file.mimetype);
+
+      // Log de sucesso
+      logger.info({
+        userId,
+        tipoDocumento: dadosExtraidos.tipo_documento?.valor,
+        confidenceMedia: calcularConfidenceMedia(dadosExtraidos),
+        camposExtraidos: contarCamposExtraidos(dadosExtraidos)
+      }, 'OCR de manutenção processado com sucesso');
+
+      // Retornar dados estruturados
+      // NOTA: A imagem permanece no servidor e pode ser reutilizada no cadastro
+      // O frontend deve enviar a imagem novamente no cadastro (mais seguro)
+      res.json({
+        success: true,
+        dados: dadosExtraidos,
+        imagem_url: construirUrlImagem(file.filename, req),
+        imagem_filename: file.filename // Informação para referência (opcional)
+      });
+
+    } catch (ocrError) {
+      // Log de erro
+      logger.error({
+        userId,
+        error: ocrError.message,
+        stack: ocrError.stack
+      }, 'Erro ao processar OCR de manutenção');
+
+      // Limpar arquivo em caso de erro
+      if (fs.existsSync(file.path)) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch (cleanupError) {
+          console.error('Erro ao limpar arquivo:', cleanupError);
+        }
+      }
+
+      // Retornar erro controlado
+      return res.status(500).json({
+        error: 'Erro ao processar imagem via OCR',
+        code: 'OCR_ERROR',
+        message: 'Não foi possível extrair dados da imagem. Tente novamente ou preencha manualmente.',
+        details: process.env.NODE_ENV !== 'production' ? ocrError.message : undefined
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Erro ao processar OCR de manutenção:', error);
+    return res.status(500).json({
+      error: 'Erro interno ao processar requisição',
+      code: 'INTERNAL_ERROR',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * Calcula confidence média dos campos extraídos
+ */
+function calcularConfidenceMedia(dados) {
+  const campos = Object.values(dados).filter(campo => 
+    campo && typeof campo === 'object' && campo.confidence !== undefined
+  );
+  if (campos.length === 0) return 0;
+  const soma = campos.reduce((acc, campo) => acc + campo.confidence, 0);
+  return soma / campos.length;
+}
+
+/**
+ * Conta quantos campos foram extraídos com confidence > 0
+ */
+function contarCamposExtraidos(dados) {
+  return Object.values(dados).filter(campo => 
+    campo && typeof campo === 'object' && 
+    campo.valor !== null && 
+    campo.valor !== undefined &&
+    campo.confidence > 0
+  ).length;
+}
 
 // Excluir manutenção
 router.delete('/:id', authRequired, requireRole('admin', 'operador'), async (req, res) => {

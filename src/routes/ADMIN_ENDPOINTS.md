@@ -1,5 +1,7 @@
 # Endpoints Administrativos
 
+⚠️ **REMOVER APÓS USO**: este endpoint é **TEMPORÁRIO** e existe apenas para bootstrap administrativo inicial (reset de dados operacionais). Após executar uma única vez, **remova o env `ENABLE_ADMIN_RESET` e o código/rota**.
+
 ## POST /api/admin/reset-operational-data
 
 Endpoint administrativo para resetar dados operacionais do banco de dados.
@@ -10,6 +12,10 @@ Endpoint administrativo para resetar dados operacionais do banco de dados.
 2. **Role admin**: Usuário deve ter `role === 'admin'`
 3. **Variável de ambiente**: `ENABLE_ADMIN_RESET=true` deve estar configurada
 4. **Confirmação explícita**: Body deve conter `{ confirm: "RESET_ALL_DATA" }`
+
+### Importante (gating por env)
+
+- Se `ENABLE_ADMIN_RESET !== 'true'` o endpoint **não é montado** e qualquer chamada deve retornar **404** (não 403).
 
 ### Request
 
@@ -47,19 +53,25 @@ Content-Type: application/json
 
 ```json
 {
-  "error": "Endpoint administrativo desabilitado",
-  "message": "O reset de dados operacionais via API está desabilitado. Use o script CLI se necessário."
+  "success": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Not found"
+  }
 }
 ```
 
-**Status Code**: `403 Forbidden`
+**Status Code**: `404 Not Found`
 
 ### Response (Erro - Confirmação Inválida)
 
 ```json
 {
-  "error": "Confirmação inválida",
-  "message": "É necessário enviar { confirm: \"RESET_ALL_DATA\" } no body para executar o reset."
+  "success": false,
+  "error": {
+    "code": "INVALID_CONFIRM",
+    "message": "É necessário enviar { \"confirm\": \"RESET_ALL_DATA\" } no body para executar o reset."
+  }
 }
 ```
 
@@ -69,7 +81,11 @@ Content-Type: application/json
 
 ```json
 {
-  "error": "Acesso negado"
+  "success": false,
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "Acesso negado"
+  }
 }
 ```
 
@@ -79,7 +95,11 @@ Content-Type: application/json
 
 ```json
 {
-  "error": "Token inválido ou expirado"
+  "success": false,
+  "error": {
+    "code": "INVALID_TOKEN",
+    "message": "Token inválido ou expirado"
+  }
 }
 ```
 
@@ -89,8 +109,11 @@ Content-Type: application/json
 
 ```json
 {
-  "error": "Erro ao executar reset de dados",
-  "message": "Ocorreu um erro ao resetar os dados operacionais. A transação foi revertida automaticamente."
+  "success": false,
+  "error": {
+    "code": "INTERNAL_ERROR",
+    "message": "Ocorreu um erro interno ao resetar os dados operacionais. A transação foi revertida automaticamente."
+  }
 }
 ```
 
@@ -136,6 +159,7 @@ ENABLE_ADMIN_RESET=true
 - Por padrão, o endpoint está **DESABILITADO** (`ENABLE_ADMIN_RESET` não definida ou `false`)
 - Apenas habilite em ambientes de staging/testes
 - **NUNCA** habilite em produção sem necessidade explícita
+- **REMOVER APÓS USO**: desative o env e remova o endpoint do código
 
 ### Exemplo de Uso (cURL)
 
