@@ -825,6 +825,49 @@ router.put('/:id/km', authRequired, async (req, res) => {
   }
 });
 
+// Gerar link de compartilhamento do veículo (DEVE VIR ANTES DE /:id)
+router.post('/:id/compartilhar', authRequired, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { expira_em } = req.body;
+    const userId = req.userId;
+
+    // Verificar se o veículo existe e pertence ao usuário
+    const veiculo = await queryOne(
+      'SELECT id, usuario_id FROM veiculos WHERE id = ? AND usuario_id = ?',
+      [id, userId]
+    );
+
+    if (!veiculo) {
+      return res.status(404).json({ error: 'Veículo não encontrado' });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const baseUrl = process.env.RENDER_EXTERNAL_URL || 'https://troia-mvp.onrender.com';
+    const urlCompartilhamento = `${baseUrl.replace(/\/$/, '')}/compartilhamento/${token}`;
+
+    // tipo 'visualizacao' para compatibilidade com GET /compartilhamento/:token
+    const expiraEmVal = expira_em && expira_em.trim() ? expira_em.trim() : null;
+
+    await query(
+      `INSERT INTO veiculo_compartilhamentos (veiculo_id, token, tipo, criado_por_usuario_id, expira_em)
+       VALUES (?, ?, 'visualizacao', ?, ?)`,
+      [id, token, userId, expiraEmVal]
+    );
+
+    res.json({
+      success: true,
+      token,
+      url: urlCompartilhamento,
+      link: urlCompartilhamento,
+      expira_em: expiraEmVal,
+    });
+  } catch (error) {
+    console.error('Erro ao criar link de compartilhamento:', error);
+    res.status(500).json({ error: 'Erro ao criar link de compartilhamento' });
+  }
+});
+
 // Transferir veículo para outro usuário (DEVE VIR ANTES DE /:id)
 router.post('/:id/transferir', authRequired, async (req, res) => {
   try {

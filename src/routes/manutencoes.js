@@ -386,16 +386,27 @@ router.post('/ocr', authRequired, ocrRateLimit('manutencao'), upload.single('ima
       // Importar serviço de OCR
       const { extrairDadosManutencao } = await import('../services/ocrMaintenanceService.js');
       
-      // Processar OCR
-      const dadosExtraidos = await extrairDadosManutencao(file.path, file.mimetype);
-
-      // Log de sucesso
+      // Iniciar processamento OCR
+      const inicioProcessamento = Date.now();
       logger.info({
         userId,
+        status: 'inicio',
+        tipo: 'manutencao'
+      }, 'Iniciando OCR de manutenção');
+      
+      // Processar OCR
+      const dadosExtraidos = await extrairDadosManutencao(file.path, file.mimetype);
+      
+      const tempoProcessamento = Date.now() - inicioProcessamento;
+
+      // Log de sucesso (apenas metadados resumidos)
+      logger.info({
+        userId,
+        status: 'success',
         tipoDocumento: dadosExtraidos.tipo_documento?.valor,
-        confidenceMedia: calcularConfidenceMedia(dadosExtraidos),
-        camposExtraidos: contarCamposExtraidos(dadosExtraidos)
-      }, 'OCR de manutenção processado com sucesso');
+        camposExtraidos: contarCamposExtraidos(dadosExtraidos),
+        tempoMs: tempoProcessamento
+      }, 'OCR de manutenção concluído');
 
       // Retornar dados estruturados
       // NOTA: A imagem permanece no servidor e pode ser reutilizada no cadastro
@@ -408,19 +419,19 @@ router.post('/ocr', authRequired, ocrRateLimit('manutencao'), upload.single('ima
       });
 
     } catch (ocrError) {
-      // Log de erro
+      // Log de erro (apenas metadados, sem stack trace)
       logger.error({
         userId,
-        error: ocrError.message,
-        stack: ocrError.stack
-      }, 'Erro ao processar OCR de manutenção');
+        status: 'error',
+        motivo: ocrError.message || 'Erro desconhecido no OCR'
+      }, 'Falha ao processar OCR de manutenção');
 
       // Limpar arquivo em caso de erro
       if (fs.existsSync(file.path)) {
         try {
           fs.unlinkSync(file.path);
         } catch (cleanupError) {
-          console.error('Erro ao limpar arquivo:', cleanupError);
+          // Log silencioso de cleanup (não crítico)
         }
       }
 
@@ -434,7 +445,13 @@ router.post('/ocr', authRequired, ocrRateLimit('manutencao'), upload.single('ima
     }
 
   } catch (error) {
-    console.error('❌ Erro ao processar OCR de manutenção:', error);
+    // Log de erro genérico (sem stack trace completo)
+    logger.error({
+      userId: req.userId,
+      status: 'error',
+      motivo: error.message || 'Erro interno desconhecido'
+    }, 'Erro ao processar requisição OCR de manutenção');
+    
     return res.status(500).json({
       error: 'Erro interno ao processar requisição',
       code: 'INTERNAL_ERROR',
@@ -442,18 +459,6 @@ router.post('/ocr', authRequired, ocrRateLimit('manutencao'), upload.single('ima
     });
   }
 });
-
-/**
- * Calcula confidence média dos campos extraídos
- */
-function calcularConfidenceMedia(dados) {
-  const campos = Object.values(dados).filter(campo => 
-    campo && typeof campo === 'object' && campo.confidence !== undefined
-  );
-  if (campos.length === 0) return 0;
-  const soma = campos.reduce((acc, campo) => acc + campo.confidence, 0);
-  return soma / campos.length;
-}
 
 /**
  * Conta quantos campos foram extraídos com confidence > 0

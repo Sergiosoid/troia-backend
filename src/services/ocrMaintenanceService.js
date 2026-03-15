@@ -82,7 +82,8 @@ Retorne APENAS um JSON válido:
 
     return { tipo: TIPOS_DOCUMENTO.NOTA_SIMPLES, confidence: 0.5 };
   } catch (error) {
-    console.error('[OCR Manutenção] Erro ao classificar tipo:', error);
+    // Log apenas mensagem de erro, sem stack trace completo
+    console.error('[OCR Manutenção] Erro ao classificar tipo:', error.message || 'Erro desconhecido');
     return { tipo: TIPOS_DOCUMENTO.NOTA_SIMPLES, confidence: 0.3 };
   }
 }
@@ -179,8 +180,8 @@ IMPORTANTE:
     try {
       dados = JSON.parse(jsonText);
     } catch (parseError) {
-      console.warn('[OCR Manutenção] Erro ao fazer parse do JSON:', parseError.message);
-      console.warn('[OCR Manutenção] Resposta recebida:', textResponse);
+      // Log apenas mensagem de erro, SEM imprimir texto OCR bruto
+      console.warn('[OCR Manutenção] Erro ao fazer parse do JSON, usando fallback:', parseError.message);
       dados = extrairDadosFallback(textResponse);
     }
 
@@ -188,7 +189,8 @@ IMPORTANTE:
     return normalizarDadosExtraidos(dados, classificacao);
 
   } catch (error) {
-    console.error('[OCR Manutenção] Erro ao processar imagem:', error);
+    // Log apenas mensagem de erro, sem stack trace completo
+    console.error('[OCR Manutenção] Erro ao processar imagem:', error.message || 'Erro desconhecido');
     throw error;
   }
 }

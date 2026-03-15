@@ -25,6 +25,12 @@ const router = express.Router();
  * - limite: itens por página (padrão: 50)
  */
 router.get('/', authRequired, async (req, res) => {
+  const resultados = {
+    veiculos: [],
+    manutencoes: [],
+    abastecimentos: [],
+  };
+
   try {
     const userId = req.userId;
     const {
@@ -42,14 +48,11 @@ router.get('/', authRequired, async (req, res) => {
       limite = 50,
     } = req.query;
 
-    const offset = (parseInt(pagina) - 1) * parseInt(limite);
-    const termoLower = (termo || '').toLowerCase().trim();
-
-    const resultados = {
-      veiculos: [],
-      manutencoes: [],
-      abastecimentos: [],
-    };
+    const limitNum = Math.min(100, Math.max(1, parseInt(limite, 10) || 50));
+    const pageNum = Math.max(1, parseInt(pagina, 10) || 1);
+    const offset = (pageNum - 1) * limitNum;
+    const termoTrim = (termo || '').trim();
+    const termoPattern = termoTrim ? `%${termoTrim}%` : null;
 
     // Construir condições de filtro comuns
     const condicoesData = [];
@@ -78,241 +81,209 @@ router.get('/', authRequired, async (req, res) => {
 
     // (A) BUSCAR VEÍCULOS
     if (!tipo || tipo === 'veiculos') {
-      const condicoesVeiculo = ['v.usuario_id = ?'];
-      const paramsVeiculo = [userId];
+      try {
+        const condicoesVeiculo = ['v.usuario_id = ?'];
+        const paramsVeiculo = [userId];
 
-      if (termoLower) {
-        condicoesVeiculo.push(`(
-          LOWER(v.placa) LIKE ? OR
-          LOWER(v.marca) LIKE ? OR
-          LOWER(v.modelo) LIKE ? OR
-          LOWER(v.tipo_veiculo) LIKE ? OR
-          LOWER(p.nome) LIKE ?
-        )`);
-        const termoLike = `%${termoLower}%`;
-        paramsVeiculo.push(termoLike, termoLike, termoLike, termoLike, termoLike);
+        if (termoPattern) {
+          condicoesVeiculo.push(`(
+            v.placa ILIKE ? OR
+            v.marca ILIKE ? OR
+            v.modelo ILIKE ? OR
+            v.tipo_veiculo ILIKE ? OR
+            p.nome ILIKE ?
+          )`);
+          paramsVeiculo.push(termoPattern, termoPattern, termoPattern, termoPattern, termoPattern);
+        }
+
+        if (tipo_veiculo) {
+          condicoesVeiculo.push('v.tipo_veiculo = ?');
+          paramsVeiculo.push(tipo_veiculo);
+        }
+
+        if (kmMin != null && kmMin !== '') {
+          condicoesVeiculo.push('v.km_atual >= ?');
+          paramsVeiculo.push(parseInt(kmMin, 10));
+        }
+
+        if (kmMax != null && kmMax !== '') {
+          condicoesVeiculo.push('v.km_atual <= ?');
+          paramsVeiculo.push(parseInt(kmMax, 10));
+        }
+
+        const orderByRelevancia = termoPattern
+          ? `CASE WHEN v.placa ILIKE ? THEN 1 WHEN v.modelo ILIKE ? THEN 2 WHEN v.marca ILIKE ? THEN 3 ELSE 4 END, v.modelo ASC`
+          : 'v.modelo ASC';
+        const paramsOrder = termoPattern ? [termoPattern, termoPattern, termoPattern] : [];
+
+        const queryVeiculos = `
+          SELECT 
+            v.id,
+            v.placa,
+            v.renavam,
+            v.marca,
+            v.modelo,
+            v.ano,
+            v.tipo_veiculo,
+            v.km_atual,
+            p.nome as proprietario_nome
+          FROM veiculos v
+          LEFT JOIN proprietarios p ON v.proprietario_id = p.id
+          WHERE ${condicoesVeiculo.join(' AND ')}
+          ORDER BY ${orderByRelevancia}
+          LIMIT ? OFFSET ?
+        `;
+
+        const veiculos = await queryAll(queryVeiculos, [
+          ...paramsVeiculo,
+          ...paramsOrder,
+          limitNum,
+          offset,
+        ]);
+
+        resultados.veiculos = Array.isArray(veiculos) ? veiculos.map(v => ({
+          id: v.id,
+          placa: v.placa,
+          renavam: v.renavam,
+          marca: v.marca,
+          modelo: v.modelo,
+          ano: v.ano,
+          tipo_veiculo: v.tipo_veiculo,
+          km_atual: v.km_atual,
+          proprietario_nome: v.proprietario_nome,
+        })) : [];
+      } catch (errVeiculo) {
+        console.error('Erro ao buscar veículos:', errVeiculo);
+        resultados.veiculos = [];
       }
-
-      if (tipo_veiculo) {
-        condicoesVeiculo.push('v.tipo_veiculo = ?');
-        paramsVeiculo.push(tipo_veiculo);
-      }
-
-      if (kmMin) {
-        condicoesVeiculo.push('v.km_atual >= ?');
-        paramsVeiculo.push(parseInt(kmMin));
-      }
-
-      if (kmMax) {
-        condicoesVeiculo.push('v.km_atual <= ?');
-        paramsVeiculo.push(parseInt(kmMax));
-      }
-
-      const queryVeiculos = `
-        SELECT 
-          v.id,
-          v.placa,
-          v.renavam,
-          v.marca,
-          v.modelo,
-          v.ano,
-          v.tipo_veiculo,
-          v.km_atual,
-          p.nome as proprietario_nome
-        FROM veiculos v
-        LEFT JOIN proprietarios p ON v.proprietario_id = p.id
-        WHERE ${condicoesVeiculo.join(' AND ')}
-        ORDER BY 
-          CASE 
-            WHEN LOWER(v.placa) LIKE ? THEN 1
-            WHEN LOWER(v.modelo) LIKE ? THEN 2
-            WHEN LOWER(v.marca) LIKE ? THEN 3
-            ELSE 4
-          END,
-          v.modelo ASC
-        LIMIT ? OFFSET ?
-      `;
-
-      const termoRelevancia = termoLower ? `%${termoLower}%` : '%';
-      const veiculos = await queryAll(queryVeiculos, [
-        ...paramsVeiculo,
-        termoRelevancia,
-        termoRelevancia,
-        termoRelevancia,
-        parseInt(limite),
-        offset,
-      ]);
-
-      resultados.veiculos = veiculos.map(v => ({
-        id: v.id,
-        placa: v.placa,
-        renavam: v.renavam,
-        marca: v.marca,
-        modelo: v.modelo,
-        ano: v.ano,
-        tipo_veiculo: v.tipo_veiculo,
-        km_atual: v.km_atual,
-        proprietario_nome: v.proprietario_nome,
-      }));
     }
 
     // (B) BUSCAR MANUTENÇÕES
     if (!tipo || tipo === 'manutencoes') {
-      const condicoesManutencao = ['m.usuario_id = ?'];
-      const paramsManutencao = [userId];
+      try {
+        const condicoesManutencao = ['m.usuario_id = ?'];
+        const paramsManutencao = [userId];
 
-      if (termoLower) {
-        condicoesManutencao.push(`(
-          LOWER(m.descricao) LIKE ? OR
-          LOWER(m.tipo_manutencao) LIKE ? OR
-          LOWER(m.area_manutencao) LIKE ? OR
-          LOWER(v.placa) LIKE ? OR
-          LOWER(v.modelo) LIKE ?
-        )`);
-        const termoLike = `%${termoLower}%`;
-        paramsManutencao.push(termoLike, termoLike, termoLike, termoLike, termoLike);
-      }
-
-      if (tipo_manutencao) {
-        condicoesManutencao.push('m.tipo_manutencao = ?');
-        paramsManutencao.push(tipo_manutencao);
-      }
-
-      if (condicoesData.length > 0) {
-        condicoesManutencao.push(...condicoesData);
-        paramsManutencao.push(...paramsData);
-      }
-
-      if (condicoesValor.length > 0) {
-        condicoesManutencao.push(...condicoesValor);
-        paramsManutencao.push(...paramsValor);
-      }
-
-      // Construir condições de KM usando subquery (usar ? pois db-adapter converte para PostgreSQL)
-      let condicoesKmManutencao = [];
-      if (kmMin || kmMax) {
-        // Usar subquery para calcular km_antes e km_depois
-        if (kmMin) {
-          condicoesKmManutencao.push(`(
-            EXISTS (
-              SELECT 1 FROM km_historico kh1 
-              WHERE kh1.veiculo_id = m.veiculo_id 
-                AND COALESCE(kh1.data_registro, kh1.criado_em) <= m.data 
-                AND kh1.km >= ?
-              ORDER BY COALESCE(kh1.data_registro, kh1.criado_em) DESC LIMIT 1
-            ) OR EXISTS (
-              SELECT 1 FROM km_historico kh2 
-              WHERE kh2.veiculo_id = m.veiculo_id 
-                AND COALESCE(kh2.data_registro, kh2.criado_em) >= m.data 
-                AND kh2.km >= ?
-              ORDER BY COALESCE(kh2.data_registro, kh2.criado_em) ASC LIMIT 1
-            )
+        if (termoPattern) {
+          condicoesManutencao.push(`(
+            m.descricao ILIKE ? OR
+            m.tipo_manutencao ILIKE ? OR
+            m.area_manutencao ILIKE ? OR
+            v.placa ILIKE ? OR
+            v.modelo ILIKE ?
           )`);
-          paramsManutencao.push(parseInt(kmMin), parseInt(kmMin));
+          paramsManutencao.push(termoPattern, termoPattern, termoPattern, termoPattern, termoPattern);
         }
-        if (kmMax) {
-          condicoesKmManutencao.push(`(
-            EXISTS (
-              SELECT 1 FROM km_historico kh3 
-              WHERE kh3.veiculo_id = m.veiculo_id 
-                AND COALESCE(kh3.data_registro, kh3.criado_em) <= m.data 
-                AND kh3.km <= ?
-              ORDER BY COALESCE(kh3.data_registro, kh3.criado_em) DESC LIMIT 1
-            ) OR EXISTS (
-              SELECT 1 FROM km_historico kh4 
-              WHERE kh4.veiculo_id = m.veiculo_id 
-                AND COALESCE(kh4.data_registro, kh4.criado_em) >= m.data 
-                AND kh4.km <= ?
-              ORDER BY COALESCE(kh4.data_registro, kh4.criado_em) ASC LIMIT 1
-            )
-          )`);
-          paramsManutencao.push(parseInt(kmMax), parseInt(kmMax));
+
+        if (tipo_manutencao) {
+          condicoesManutencao.push('m.tipo_manutencao = ?');
+          paramsManutencao.push(tipo_manutencao);
         }
+
+        if (condicoesData.length > 0) {
+          condicoesManutencao.push(...condicoesData);
+          paramsManutencao.push(...paramsData);
+        }
+
+        if (condicoesValor.length > 0) {
+          condicoesManutencao.push(...condicoesValor);
+          paramsManutencao.push(...paramsValor);
+        }
+
+        const condicoesKmManutencao = [];
+        if (kmMin != null && kmMin !== '') {
+          condicoesKmManutencao.push('(SELECT km FROM km_historico WHERE veiculo_id = m.veiculo_id ORDER BY COALESCE(data_registro, criado_em) DESC LIMIT 1) >= ?');
+          paramsManutencao.push(parseInt(kmMin, 10));
+        }
+        if (kmMax != null && kmMax !== '') {
+          condicoesKmManutencao.push('(SELECT km FROM km_historico WHERE veiculo_id = m.veiculo_id ORDER BY COALESCE(data_registro, criado_em) ASC LIMIT 1) <= ?');
+          paramsManutencao.push(parseInt(kmMax, 10));
+        }
+
+        const todasCondicoesManutencao = [...condicoesManutencao, ...condicoesKmManutencao];
+        const orderByRelevanciaManut = termoPattern
+          ? `CASE WHEN m.descricao ILIKE ? THEN 1 WHEN v.placa ILIKE ? THEN 2 ELSE 3 END, m.data DESC`
+          : 'm.data DESC';
+        const paramsOrderManut = termoPattern ? [termoPattern, termoPattern] : [];
+
+        const queryManutencoes = `
+          SELECT 
+            m.id,
+            m.descricao,
+            m.data,
+            m.valor,
+            km_antes.km AS km_antes,
+            km_depois.km AS km_depois,
+            m.tipo_manutencao,
+            m.area_manutencao,
+            m.imagem as imagem_url,
+            v.id as veiculo_id,
+            v.placa as veiculo_placa,
+            v.modelo as veiculo_modelo
+          FROM manutencoes m
+          INNER JOIN veiculos v ON m.veiculo_id = v.id
+          LEFT JOIN LATERAL (
+            SELECT km
+            FROM km_historico
+            WHERE veiculo_id = m.veiculo_id
+              AND COALESCE(data_registro, criado_em) <= m.data
+            ORDER BY COALESCE(data_registro, criado_em) DESC
+            LIMIT 1
+          ) km_antes ON true
+          LEFT JOIN LATERAL (
+            SELECT km
+            FROM km_historico
+            WHERE veiculo_id = m.veiculo_id
+              AND COALESCE(data_registro, criado_em) >= m.data
+            ORDER BY COALESCE(data_registro, criado_em) ASC
+            LIMIT 1
+          ) km_depois ON true
+          WHERE ${todasCondicoesManutencao.join(' AND ')}
+          ORDER BY ${orderByRelevanciaManut}
+          LIMIT ? OFFSET ?
+        `;
+
+        const manutencoes = await queryAll(queryManutencoes, [
+          ...paramsManutencao,
+          ...paramsOrderManut,
+          limitNum,
+          offset,
+        ]);
+
+        resultados.manutencoes = Array.isArray(manutencoes) ? manutencoes.map(m => ({
+          id: m.id,
+          descricao: m.descricao,
+          data: m.data,
+          valor: parseFloat(m.valor) || 0,
+          km_antes: m.km_antes,
+          km_depois: m.km_depois,
+          tipo_manutencao: m.tipo_manutencao,
+          area_manutencao: m.area_manutencao,
+          imagem_url: m.imagem_url,
+          veiculo_id: m.veiculo_id,
+          veiculo_placa: m.veiculo_placa,
+          veiculo_modelo: m.veiculo_modelo,
+        })) : [];
+      } catch (errManutencao) {
+        console.error('Erro ao buscar manutenções:', errManutencao);
+        resultados.manutencoes = [];
       }
-
-      const queryManutencoes = `
-        SELECT 
-          m.id,
-          m.descricao,
-          m.data,
-          m.valor,
-          km_antes.km AS km_antes,
-          km_depois.km AS km_depois,
-          m.tipo_manutencao,
-          m.area_manutencao,
-          m.imagem as imagem_url,
-          v.id as veiculo_id,
-          v.placa as veiculo_placa,
-          v.modelo as veiculo_modelo
-        FROM manutencoes m
-        INNER JOIN veiculos v ON m.veiculo_id = v.id
-        LEFT JOIN LATERAL (
-          SELECT km
-          FROM km_historico
-          WHERE veiculo_id = m.veiculo_id
-            AND COALESCE(data_registro, criado_em) <= m.data
-          ORDER BY COALESCE(data_registro, criado_em) DESC
-          LIMIT 1
-        ) km_antes ON true
-        LEFT JOIN LATERAL (
-          SELECT km
-          FROM km_historico
-          WHERE veiculo_id = m.veiculo_id
-            AND COALESCE(data_registro, criado_em) >= m.data
-          ORDER BY COALESCE(data_registro, criado_em) ASC
-          LIMIT 1
-        ) km_depois ON true
-        WHERE ${[...condicoesManutencao, ...condicoesKmManutencao].join(' AND ')}
-        ORDER BY 
-          CASE 
-            WHEN LOWER(m.descricao) LIKE ? THEN 1
-            WHEN LOWER(v.placa) LIKE ? THEN 2
-            ELSE 3
-          END,
-          m.data DESC
-        LIMIT ? OFFSET ?
-      `;
-
-      const termoRelevancia = termoLower ? `%${termoLower}%` : '%';
-      const manutencoes = await queryAll(queryManutencoes, [
-        ...paramsManutencao,
-        termoRelevancia,
-        termoRelevancia,
-        parseInt(limite),
-        offset,
-      ]);
-
-      resultados.manutencoes = manutencoes.map(m => ({
-        id: m.id,
-        descricao: m.descricao,
-        data: m.data,
-        valor: parseFloat(m.valor) || 0,
-        km_antes: m.km_antes,
-        km_depois: m.km_depois,
-        tipo_manutencao: m.tipo_manutencao,
-        area_manutencao: m.area_manutencao,
-        imagem_url: m.imagem_url,
-        veiculo_id: m.veiculo_id,
-        veiculo_placa: m.veiculo_placa,
-        veiculo_modelo: m.veiculo_modelo,
-      }));
     }
 
-    // (C) BUSCAR ABASTECIMENTOS
+    // (C) BUSCAR ABASTECIMENTOS (tabela: imagem; sem texto_ocr/observacoes)
     if (!tipo || tipo === 'abastecimentos') {
-      const condicoesAbastecimento = ['a.usuario_id = ?'];
+      try {
+        const condicoesAbastecimento = ['a.usuario_id = ?'];
       const paramsAbastecimento = [userId];
 
-      if (termoLower) {
+      if (termoPattern) {
         condicoesAbastecimento.push(`(
-          LOWER(a.posto) LIKE ? OR
-          LOWER(a.tipo_combustivel) LIKE ? OR
-          LOWER(v.placa) LIKE ? OR
-          LOWER(v.modelo) LIKE ? OR
-          LOWER(a.texto_ocr) LIKE ?
+          a.posto ILIKE ? OR
+          a.tipo_combustivel ILIKE ? OR
+          v.placa ILIKE ? OR
+          v.modelo ILIKE ?
         )`);
-        const termoLike = `%${termoLower}%`;
-        paramsAbastecimento.push(termoLike, termoLike, termoLike, termoLike, termoLike, termoLike);
+        paramsAbastecimento.push(termoPattern, termoPattern, termoPattern, termoPattern);
       }
 
       if (condicoesData.length > 0) {
@@ -346,6 +317,11 @@ router.get('/', authRequired, async (req, res) => {
         paramsAbastecimento.push(parseInt(kmMax), parseInt(kmMax));
       }
 
+      const orderByAbast = termoPattern
+        ? `CASE WHEN a.posto ILIKE ? THEN 1 WHEN v.placa ILIKE ? THEN 2 ELSE 3 END, a.data DESC`
+        : 'a.data DESC';
+      const paramsOrderAbast = termoPattern ? [termoPattern, termoPattern] : [];
+
       const queryAbastecimentos = `
         SELECT 
           a.id,
@@ -357,37 +333,25 @@ router.get('/', authRequired, async (req, res) => {
           a.tipo_combustivel,
           a.km_antes,
           a.km_depois,
-          a.imagem_url,
-          a.texto_ocr,
+          a.imagem,
           v.id as veiculo_id,
           v.placa as veiculo_placa,
           v.modelo as veiculo_modelo
         FROM abastecimentos a
         INNER JOIN veiculos v ON a.veiculo_id = v.id
         WHERE ${condicoesAbastecimento.join(' AND ')}
-        ORDER BY 
-          CASE 
-            WHEN LOWER(a.posto) LIKE ? THEN 1
-            WHEN LOWER(v.placa) LIKE ? THEN 2
-            WHEN LOWER(a.texto_ocr) LIKE ? OR LOWER(a.observacoes) LIKE ? THEN 3
-            ELSE 4
-          END,
-          a.data DESC
+        ORDER BY ${orderByAbast}
         LIMIT ? OFFSET ?
       `;
 
-      const termoRelevancia = termoLower ? `%${termoLower}%` : '%';
       const abastecimentos = await queryAll(queryAbastecimentos, [
         ...paramsAbastecimento,
-        termoRelevancia,
-        termoRelevancia,
-        termoRelevancia,
-        termoRelevancia,
-        parseInt(limite),
+        ...paramsOrderAbast,
+        limitNum,
         offset,
       ]);
 
-      resultados.abastecimentos = abastecimentos.map(a => ({
+      resultados.abastecimentos = Array.isArray(abastecimentos) ? abastecimentos.map(a => ({
         id: a.id,
         data: a.data,
         posto: a.posto,
@@ -397,19 +361,21 @@ router.get('/', authRequired, async (req, res) => {
         tipo_combustivel: a.tipo_combustivel,
         km_antes: a.km_antes,
         km_depois: a.km_depois,
-        imagem_url: a.imagem_url,
-        texto_ocr: a.texto_ocr,
-        observacoes: a.observacoes,
+        imagem_url: a.imagem,
         veiculo_id: a.veiculo_id,
         veiculo_placa: a.veiculo_placa,
         veiculo_modelo: a.veiculo_modelo,
-      }));
+      })) : [];
+    } catch (errAbast) {
+      console.error('Erro ao buscar abastecimentos:', errAbast);
+      resultados.abastecimentos = [];
+    }
     }
 
     res.json(resultados);
   } catch (error) {
     console.error('Erro ao buscar:', error);
-    res.status(500).json({ error: 'Erro ao realizar busca' });
+    res.json(resultados);
   }
 });
 
